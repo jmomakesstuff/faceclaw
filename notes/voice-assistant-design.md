@@ -296,8 +296,9 @@ frames, three multiplexed channels:
 ```
 { v: 1, chan: "ctl" | "chat" | "mcp", ... }
 
-ctl:  hello {deviceName, token, capabilities}, hello-ack, ping/pong, error
-chat: utterance {turnId, text, ctx}        (phone -> agent)
+ctl:  hello {deviceName, token, capabilities}, hello-ack {capabilities},
+      ping/pong, error
+chat: utterance {turnId, text, ctx, conversationId?}   (phone -> agent)
       text-delta {turnId, text}            (agent -> phone)
       tool-activity {turnId, label}        (agent -> phone, optional status)
       turn-done {turnId, stopReason} / turn-error {turnId, message}
@@ -310,6 +311,15 @@ initialize handshake, not from who dialed). It serves `tools/list` from the
 ToolRegistry, `tools/call` into it, and emits `tools/list_changed` on
 foreground changes. This means the agent-side integration needs zero
 Faceclaw-specific tool code — the glasses appear as a normal MCP server.
+
+**Conversations.** A bridge whose hello-ack `capabilities` include
+`"conversations"` keeps a separate agent session per conversation. The phone
+then puts its current conversation's id on each utterance (`conversationId`,
+short and plain: `[A-Za-z0-9._-]{1,64}`), and AI Chat's New session and
+Switch session drive the bridge's sessions instead of being greyed out; the
+model stays the bridge's. A bridge without the capability gets no
+`conversationId` and the phone keeps its single conversation, exactly as
+before.
 
 ### Agent-side adapters
 

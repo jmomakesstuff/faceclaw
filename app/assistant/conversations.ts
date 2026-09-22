@@ -87,7 +87,7 @@ export class AssistantConversations {
     const config = this.resolve(record.model, record.reasoning);
     if (!config) return null;
     if (!record.session) {
-      record.session = new AssistantSession(config, undefined, record.history);
+      record.session = new AssistantSession(config, undefined, record.history, record.id);
       record.session.onChanged(() => this.changed(!record.session!.isTurnActive()));
     } else record.session.configure(config);
     return record.session;

@@ -1,6 +1,7 @@
 import { GrayImage, type UiFont } from "../../graphics/image";
 import { getDefaultSmallFont } from "../../graphics/ui-fonts";
 import { truncateText, wrapText } from "../../graphics/textwrap";
+import { assistantBridge } from "../../assistant/bridge-client";
 import { ASSISTANT_MODEL_CHOICES, assistantModelLabel, resolveAssistantModel } from "../../assistant/models";
 import type { AssistantTranscriptEntry } from "../../assistant/session";
 import type { AssistantConversations, ReasoningLevel } from "../../assistant/conversations";
@@ -114,13 +115,18 @@ class AiChatLayer implements Layer {
     const record = this.conversations.current();
     const busy = () => this.draft.active || Boolean(record.session?.isTurnActive());
     const external = assistantBackendSetting.get() === "external";
+    // A bridge that keeps one agent session per conversation lets the phone's
+    // session list drive it; the model stays the bridge's either way.
+    const bridgeSessions = () => external && assistantBridge.supportsConversations();
+    const sessionsLocked = () => external && !bridgeSessions();
     const submenu = (ctx: LayerContext, title: string, items: MenuItem[]) => ctx.stack.push(new WindowMenuLayer(title, items, true));
     return [
-      ...(external ? [{ label: "Sessions and model managed by bridge", disabled: true, onSelect: () => {} }] : []),
-      { label: "New session", disabled: () => external || busy(), onSelect: (ctx) => {
+      ...(external ? [{ label: bridgeSessions() ? "Model managed by bridge" : "Sessions and model managed by bridge",
+        disabled: true, onSelect: () => {} }] : []),
+      { label: "New session", disabled: () => sessionsLocked() || busy(), onSelect: (ctx) => {
         if (this.conversations.create()) ctx.stack.clearToBase();
       } },
-      { label: "Switch session", disabled: () => external || busy(), onSelect: (ctx) => submenu(ctx, "Sessions",
+      { label: "Switch session", disabled: () => sessionsLocked() || busy(), onSelect: (ctx) => submenu(ctx, "Sessions",
         [...this.conversations.list()].reverse().map((item) => ({
           label: `${item.id === record.id ? "✓ " : ""}${this.conversations.title(item)}`,
           onSelect: (ctx) => { if (this.conversations.select(item.id)) ctx.stack.clearToBase(); },

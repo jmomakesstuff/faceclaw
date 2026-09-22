@@ -11,6 +11,9 @@ declare const com: any;
  * frame, three multiplexed channels:
  *
  *   ctl:  hello/hello-ack auth handshake, ping/pong, error
+ *         (hello-ack lists the bridge's `capabilities`; "conversations"
+ *         means an utterance may carry a `conversationId`, and the bridge
+ *         keeps a separate agent session for each one)
  *   chat: utterance in, streamed reply out (per-turn)
  *   mcp:  raw MCP JSON-RPC; the phone is the MCP *server* (ToolRegistry)
  *
@@ -59,6 +62,8 @@ export class AssistantBridgeClient {
   private reconnectDelayMs = RECONNECT_MIN_MS;
   private activeTurn: ActiveTurn | null = null;
   private turnSeq = 0;
+  /** What the connected bridge advertised in hello-ack; empty until then. */
+  private serverCapabilities: readonly string[] = [];
   private mcpServer: AssistantMcpServer | null = null;
   private unsubscribeToolsChanged: (() => void) | null = null;
   private readonly stateListeners = new Set<(state: AssistantBridgeState) => void>();
@@ -74,6 +79,16 @@ export class AssistantBridgeClient {
 
   isConnected(): boolean {
     return this.phase === "connected";
+  }
+
+  /**
+   * True when the connected bridge keeps a separate agent session per
+   * conversation, so the phone's own session list can drive it. A bridge
+   * without the capability has one conversation, and the phone must not
+   * pretend otherwise.
+   */
+  supportsConversations(): boolean {
+    return this.phase === "connected" && this.serverCapabilities.includes("conversations");
   }
 
   /**
@@ -114,18 +129,21 @@ export class AssistantBridgeClient {
       this.ws = null;
     }
     this.listenerProxy = null;
+    this.serverCapabilities = [];
     this.setState("idle", "Not connected.");
   }
 
   /**
    * Send an utterance as a new turn. Streaming replies arrive via callbacks.
    * A turn already in flight is superseded (the session serializes turns, so
-   * this is just a safety net).
+   * this is just a safety net). `conversationId` selects the bridge-side
+   * session, and is sent only to a bridge that advertised "conversations".
    */
   sendUtterance(
     text: string,
     ctx: AssistantContext,
     callbacks: AssistantTurnCallbacks,
+    conversationId?: string,
   ): AssistantTurnHandle {
     if (this.phase !== "connected") {
       callbacks.onError(`Agent bridge is not connected (${this.status})`);
@@ -142,7 +160,9 @@ export class AssistantBridgeClient {
         this.failActiveTurn("The agent took too long to reply");
       }, TURN_TIMEOUT_MS),
     };
-    this.send({ chan: "chat", type: "utterance", turnId, text, ctx });
+    const conversation =
+      conversationId && this.serverCapabilities.includes("conversations") ? { conversationId } : {};
+    this.send({ chan: "chat", type: "utterance", turnId, text, ctx, ...conversation });
     return {
       cancel: () => {
         if (this.activeTurn?.turnId !== turnId) return;
@@ -167,7 +187,7 @@ export class AssistantBridgeClient {
           version: PROTOCOL_VERSION,
           token: this.options!.token,
           deviceName: this.options!.deviceName,
-          capabilities: ["chat", "mcp"],
+          capabilities: ["chat", "mcp", "conversations"],
         });
       },
       onTextMessage: (message: string) => {
@@ -221,6 +241,9 @@ export class AssistantBridgeClient {
   private handleCtl(frame: any): void {
     if (frame.type === "hello-ack") {
       this.reconnectDelayMs = RECONNECT_MIN_MS;
+      this.serverCapabilities = Array.isArray(frame.capabilities)
+        ? frame.capabilities.filter((c: unknown): c is string => typeof c === "string")
+        : [];
       this.setState("connected", `Connected to ${String(frame.serverName ?? "bridge")}`);
       return;
     }
@@ -269,6 +292,8 @@ export class AssistantBridgeClient {
   private handleConnectionLost(status: string): void {
     this.ws = null;
     this.listenerProxy = null;
+    // The next dial may reach a different bridge; learn its capabilities anew.
+    this.serverCapabilities = [];
     // Keep a ctl-error status (e.g. "invalid token") in preference to the
     // generic close message that follows it.
     const detail = this.status.startsWith("Bridge error:") ? this.status : status;

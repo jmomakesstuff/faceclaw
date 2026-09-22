@@ -48,6 +48,8 @@ export class AssistantSession {
     private config: AssistantBackendConfig,
     private readonly registry: ToolRegistry = toolRegistry,
     history?: AssistantSessionHistory,
+    /** Names this conversation to an external bridge that keeps one session per conversation. */
+    private readonly conversationId?: string,
   ) {
     if (history) {
       this.messages.push(...history.messages);
@@ -149,7 +151,7 @@ export class AssistantSession {
     if (this.config.kind === "external") {
       // History and the agent loop live on the agent's machine; the phone just
       // streams this turn. The overlay keeps its own display state.
-      const handle = assistantBridge.sendUtterance(text, ctx, wrappedCallbacks);
+      const handle = assistantBridge.sendUtterance(text, ctx, wrappedCallbacks, this.conversationId);
       if (generation === this.turnGeneration && this.turnHandle) this.turnHandle = handle;
       return;
     }

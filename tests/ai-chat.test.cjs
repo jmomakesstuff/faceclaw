@@ -350,7 +350,7 @@ test('ordinary apps retain long-press system menu and games retain the escape ti
   assert.equal(env.shell.escapeMenuTimer, null);
 });
 
-function chatLayerEnv() {
+function chatLayerEnv({ backend = 'direct', bridge = { supportsConversations: () => false } } = {}) {
   const env = conversations();
   const textwrap = load('app/graphics/textwrap.ts', {});
   const { BdfFont } = load('app/graphics/bdffont.ts', { '@nativescript/core': {} });
@@ -360,7 +360,8 @@ function chatLayerEnv() {
   const { createAiChatWindow } = load('app/apps/ai-chat/ai-chat-app.ts', {
     '../../graphics/image': graphics, '../../graphics/ui-fonts': { getDefaultSmallFont: () => font },
     '../../graphics/textwrap': textwrap, '../../assistant/models': { assistantModelLabel: (s) => s },
-    '../../ui/dashboard-settings': { assistantBackendSetting: { get: () => 'direct' } },
+    '../../ui/dashboard-settings': { assistantBackendSetting: { get: () => backend } },
+    '../../assistant/bridge-client': { assistantBridge: bridge },
     '../../ui/gestures': load('app/ui/gestures.ts', {}), '../../ui/window-menu': {},
     '../../ui/shell/in-process-window': { createInProcessWindow(options) {
       windowOptions = options; return { requestRender() {} };
@@ -411,4 +412,20 @@ test('chat paints at both window heights with pending speech pinned beneath hist
       fs.writeFileSync(path.join(process.env.FACECLAW_CHAT_RENDER_DIR, `chat-${width}x${height}.png`), Buffer.from(png));
     }
   }
+});
+
+test('external mode unlocks New and Switch session only for a bridge that keeps conversations', () => {
+  let supported = false;
+  const env = chatLayerEnv({ backend: 'external', bridge: { supportsConversations: () => supported } });
+  const item = (label) => env.layer.menuItems().find((entry) => entry.label === label);
+  assert.equal(env.layer.menuItems()[0].label, 'Sessions and model managed by bridge');
+  assert.equal(item('New session').disabled(), true);
+  assert.equal(item('Switch session').disabled(), true);
+  supported = true;
+  assert.equal(env.layer.menuItems()[0].label, 'Model managed by bridge');
+  assert.equal(item('New session').disabled(), false);
+  assert.equal(item('Switch session').disabled(), false);
+  assert.equal(env.layer.menuItems().find((entry) => entry.label.startsWith('Model: ')).disabled(), true);
+  const direct = chatLayerEnv();
+  assert.equal(direct.layer.menuItems().find((entry) => entry.label === 'New session').disabled(), false);
 });
