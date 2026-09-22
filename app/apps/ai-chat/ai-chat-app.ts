@@ -132,7 +132,8 @@ class AiChatLayer implements Layer {
       const locked = [!bridgeSessions() ? "Sessions" : null, !bridgeAgents() ? "model" : null]
         .filter((part): part is string => part !== null);
       if (locked.length === 0) return null;
-      return `${locked.join(" and ")} managed by bridge`;
+      const note = `${locked.join(" and ")} managed by bridge`;
+      return note.charAt(0).toUpperCase() + note.slice(1);
     };
     const submenu = (ctx: LayerContext, title: string, items: MenuItem[]) => ctx.stack.push(new WindowMenuLayer(title, items, true));
     return [

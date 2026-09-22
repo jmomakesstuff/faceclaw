@@ -39,7 +39,7 @@ function bridgeClient() {
 
 test('the phone offers conversations and sends a conversationId only to a bridge that advertised them', () => {
   const env = bridgeClient();
-  assert.deepEqual(env.sent[0].capabilities, ['chat', 'mcp', 'conversations']);
+  assert.deepEqual(env.sent[0].capabilities, ['chat', 'mcp', 'conversations', 'agents']);
   env.ack({ capabilities: ['chat', 'mcp', 'conversations'] });
   assert.equal(env.client.supportsConversations(), true);
   env.client.sendUtterance('hello', {}, callbacks(), 'conv-1');

@@ -350,7 +350,15 @@ test('ordinary apps retain long-press system menu and games retain the escape ti
   assert.equal(env.shell.escapeMenuTimer, null);
 });
 
-function chatLayerEnv({ backend = 'direct', bridge = { supportsConversations: () => false } } = {}) {
+const NO_BRIDGE_FEATURES = {
+  supportsConversations: () => false,
+  supportsAgents: () => false,
+  agents: () => [],
+  defaultAgentId: () => null,
+};
+
+function chatLayerEnv({ backend = 'direct', bridge = {} } = {}) {
+  bridge = { ...NO_BRIDGE_FEATURES, ...bridge };
   const env = conversations();
   const textwrap = load('app/graphics/textwrap.ts', {});
   const { BdfFont } = load('app/graphics/bdffont.ts', { '@nativescript/core': {} });
@@ -422,10 +430,39 @@ test('external mode unlocks New and Switch session only for a bridge that keeps 
   assert.equal(item('New session').disabled(), true);
   assert.equal(item('Switch session').disabled(), true);
   supported = true;
+  // The note names only what is still out of the user's hands: this bridge drives
+  // sessions but offers no agent roster, so the Agent row is what stays locked.
   assert.equal(env.layer.menuItems()[0].label, 'Model managed by bridge');
   assert.equal(item('New session').disabled(), false);
   assert.equal(item('Switch session').disabled(), false);
-  assert.equal(env.layer.menuItems().find((entry) => entry.label.startsWith('Model: ')).disabled(), true);
+  assert.equal(env.layer.menuItems().find((entry) => entry.label.startsWith('Agent: ')).disabled(), true);
   const direct = chatLayerEnv();
   assert.equal(direct.layer.menuItems().find((entry) => entry.label === 'New session').disabled(), false);
+});
+
+test('external mode turns the Model row into the bridge\'s agent picker', () => {
+  const agents = [{ id: 'main', label: 'Wren' }, { id: 'second', label: 'Merlin' }];
+  const env = chatLayerEnv({ backend: 'external', bridge: {
+    supportsConversations: () => true,
+    supportsAgents: () => true,
+    agents: () => agents,
+    defaultAgentId: () => 'main',
+  } });
+  // Both halves supported means nothing is managed by the bridge behind the user's back,
+  // so the disabled note disappears rather than claiming something false.
+  assert.equal(env.layer.menuItems()[0].label, 'New session');
+  const row = env.layer.menuItems().find((entry) => entry.label.startsWith('Agent: '));
+  assert.equal(row.label, 'Agent: Wren');
+  assert.equal(row.disabled(), false);
+  assert.equal(env.layer.menuItems().some((entry) => entry.label.startsWith('Model: ')), false);
+});
+
+test('a bridge with agents but no conversations locks sessions and says only that', () => {
+  const env = chatLayerEnv({ backend: 'external', bridge: {
+    supportsAgents: () => true,
+    agents: () => [{ id: 'main', label: 'Wren' }],
+    defaultAgentId: () => 'main',
+  } });
+  assert.equal(env.layer.menuItems()[0].label, 'Sessions managed by bridge');
+  assert.equal(env.layer.menuItems().find((entry) => entry.label.startsWith('Agent: ')).disabled(), false);
 });
