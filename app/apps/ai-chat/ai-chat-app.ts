@@ -116,13 +116,27 @@ class AiChatLayer implements Layer {
     const busy = () => this.draft.active || Boolean(record.session?.isTurnActive());
     const external = assistantBackendSetting.get() === "external";
     // A bridge that keeps one agent session per conversation lets the phone's
-    // session list drive it; the model stays the bridge's either way.
+    // session list drive it; a bridge that advertises its agents turns the Model
+    // row into a picker for them, since External mode has no model of its own.
     const bridgeSessions = () => external && assistantBridge.supportsConversations();
+    const bridgeAgents = () => external && assistantBridge.supportsAgents();
     const sessionsLocked = () => external && !bridgeSessions();
+    const chosenAgentId = () => record.agentId ?? assistantBridge.defaultAgentId();
+    const agentLabel = () => {
+      const chosen = chosenAgentId();
+      return assistantBridge.agents().find((agent) => agent.id === chosen)?.label ?? "bridge";
+    };
+    // Only say what is actually out of the user's hands.
+    const managedNote = () => {
+      if (!external) return null;
+      const locked = [!bridgeSessions() ? "Sessions" : null, !bridgeAgents() ? "model" : null]
+        .filter((part): part is string => part !== null);
+      if (locked.length === 0) return null;
+      return `${locked.join(" and ")} managed by bridge`;
+    };
     const submenu = (ctx: LayerContext, title: string, items: MenuItem[]) => ctx.stack.push(new WindowMenuLayer(title, items, true));
     return [
-      ...(external ? [{ label: bridgeSessions() ? "Model managed by bridge" : "Sessions and model managed by bridge",
-        disabled: true, onSelect: () => {} }] : []),
+      ...(managedNote() ? [{ label: managedNote()!, disabled: true, onSelect: () => {} }] : []),
       { label: "New session", disabled: () => sessionsLocked() || busy(), onSelect: (ctx) => {
         if (this.conversations.create()) ctx.stack.clearToBase();
       } },
@@ -131,12 +145,18 @@ class AiChatLayer implements Layer {
           label: `${item.id === record.id ? "✓ " : ""}${this.conversations.title(item)}`,
           onSelect: (ctx) => { if (this.conversations.select(item.id)) ctx.stack.clearToBase(); },
         }))) },
-      { label: `Model: ${assistantModelLabel(record.model)}`, disabled: () => external || busy(), onSelect: (ctx) => submenu(ctx, "Model",
-        ASSISTANT_MODEL_CHOICES.map((model) => ({
-          label: `${model === record.model ? "✓ " : ""}${assistantModelLabel(model)}`,
-          disabled: () => !this.conversations.available(model, record.reasoning),
-          onSelect: (ctx) => { if (this.conversations.configure(model, record.reasoning)) ctx.stack.clearToBase(); },
-        }))) },
+      external
+        ? { label: `Agent: ${agentLabel()}`, disabled: () => !bridgeAgents() || busy(), onSelect: (ctx) => submenu(ctx, "Agent",
+            assistantBridge.agents().map((agent) => ({
+              label: `${agent.id === chosenAgentId() ? "✓ " : ""}${agent.label}`,
+              onSelect: (ctx) => { if (this.conversations.configureAgent(agent.id)) ctx.stack.clearToBase(); },
+            }))) }
+        : { label: `Model: ${assistantModelLabel(record.model)}`, disabled: () => busy(), onSelect: (ctx) => submenu(ctx, "Model",
+            ASSISTANT_MODEL_CHOICES.map((model) => ({
+              label: `${model === record.model ? "✓ " : ""}${assistantModelLabel(model)}`,
+              disabled: () => !this.conversations.available(model, record.reasoning),
+              onSelect: (ctx) => { if (this.conversations.configure(model, record.reasoning)) ctx.stack.clearToBase(); },
+            }))) },
       { label: `Reasoning: ${record.reasoning}`, disabled: () => {
         const llm = resolveAssistantModel(record.model, { anthropic: anthropicApiKeySetting.get(), openai: openAiApiKeySetting.get() });
         return external || busy() || !llm?.effort;

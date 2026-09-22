@@ -13,7 +13,9 @@ declare const com: any;
  *   ctl:  hello/hello-ack auth handshake, ping/pong, error
  *         (hello-ack lists the bridge's `capabilities`; "conversations"
  *         means an utterance may carry a `conversationId`, and the bridge
- *         keeps a separate agent session for each one)
+ *         keeps a separate agent session for each one; "agents" means
+ *         hello-ack also carries the bridge's agent roster and its default,
+ *         and an utterance may name one with `agentId`)
  *   chat: utterance in, streamed reply out (per-turn)
  *   mcp:  raw MCP JSON-RPC; the phone is the MCP *server* (ToolRegistry)
  *
@@ -33,6 +35,12 @@ export type AssistantBridgePhase = "idle" | "connecting" | "connected" | "failed
 export type AssistantBridgeState = {
   phase: AssistantBridgePhase;
   status: string;
+};
+
+/** One agent the connected bridge will run turns against. */
+export type AssistantBridgeAgent = {
+  id: string;
+  label: string;
 };
 
 export type AssistantBridgeOptions = {
@@ -64,6 +72,9 @@ export class AssistantBridgeClient {
   private turnSeq = 0;
   /** What the connected bridge advertised in hello-ack; empty until then. */
   private serverCapabilities: readonly string[] = [];
+  /** The bridge's agent roster from hello-ack, and which of them it defaults to. */
+  private serverAgentList: readonly AssistantBridgeAgent[] = [];
+  private serverDefaultAgentId: string | null = null;
   private mcpServer: AssistantMcpServer | null = null;
   private unsubscribeToolsChanged: (() => void) | null = null;
   private readonly stateListeners = new Set<(state: AssistantBridgeState) => void>();
@@ -89,6 +100,29 @@ export class AssistantBridgeClient {
    */
   supportsConversations(): boolean {
     return this.phase === "connected" && this.serverCapabilities.includes("conversations");
+  }
+
+  /**
+   * True when the connected bridge will run a turn against an agent the phone
+   * names, so the picker can offer its roster. A bridge without the capability
+   * has one agent and the phone must not pretend otherwise.
+   */
+  supportsAgents(): boolean {
+    return (
+      this.phase === "connected" &&
+      this.serverCapabilities.includes("agents") &&
+      this.serverAgentList.length > 0
+    );
+  }
+
+  /** The bridge's agents, in the order it listed them. Empty unless connected. */
+  agents(): readonly AssistantBridgeAgent[] {
+    return this.supportsAgents() ? this.serverAgentList : [];
+  }
+
+  /** The agent a turn runs against when it names none, or null if unknown. */
+  defaultAgentId(): string | null {
+    return this.supportsAgents() ? this.serverDefaultAgentId : null;
   }
 
   /**
@@ -130,6 +164,8 @@ export class AssistantBridgeClient {
     }
     this.listenerProxy = null;
     this.serverCapabilities = [];
+    this.serverAgentList = [];
+    this.serverDefaultAgentId = null;
     this.setState("idle", "Not connected.");
   }
 
@@ -138,12 +174,15 @@ export class AssistantBridgeClient {
    * A turn already in flight is superseded (the session serializes turns, so
    * this is just a safety net). `conversationId` selects the bridge-side
    * session, and is sent only to a bridge that advertised "conversations".
+   * `agentId` picks which of the bridge's agents answers, and likewise is sent
+   * only to a bridge that advertised "agents" and listed that agent.
    */
   sendUtterance(
     text: string,
     ctx: AssistantContext,
     callbacks: AssistantTurnCallbacks,
     conversationId?: string,
+    agentId?: string,
   ): AssistantTurnHandle {
     if (this.phase !== "connected") {
       callbacks.onError(`Agent bridge is not connected (${this.status})`);
@@ -162,7 +201,11 @@ export class AssistantBridgeClient {
     };
     const conversation =
       conversationId && this.serverCapabilities.includes("conversations") ? { conversationId } : {};
-    this.send({ chan: "chat", type: "utterance", turnId, text, ctx, ...conversation });
+    // Never send an id the bridge did not list: it would refuse the turn rather
+    // than answer as somebody else, which is right but is not what the user asked for.
+    const agent =
+      agentId && this.serverAgentList.some((a) => a.id === agentId) ? { agentId } : {};
+    this.send({ chan: "chat", type: "utterance", turnId, text, ctx, ...conversation, ...agent });
     return {
       cancel: () => {
         if (this.activeTurn?.turnId !== turnId) return;
@@ -187,7 +230,7 @@ export class AssistantBridgeClient {
           version: PROTOCOL_VERSION,
           token: this.options!.token,
           deviceName: this.options!.deviceName,
-          capabilities: ["chat", "mcp", "conversations"],
+          capabilities: ["chat", "mcp", "conversations", "agents"],
         });
       },
       onTextMessage: (message: string) => {
@@ -244,6 +287,19 @@ export class AssistantBridgeClient {
       this.serverCapabilities = Array.isArray(frame.capabilities)
         ? frame.capabilities.filter((c: unknown): c is string => typeof c === "string")
         : [];
+      this.serverAgentList = Array.isArray(frame.agents)
+        ? frame.agents
+            .filter((a: any) => a && typeof a.id === "string" && a.id)
+            .map((a: any) => ({
+              id: String(a.id),
+              label: typeof a.label === "string" && a.label ? String(a.label) : String(a.id),
+            }))
+        : [];
+      const advertisedDefault = typeof frame.agentId === "string" ? frame.agentId : null;
+      this.serverDefaultAgentId =
+        advertisedDefault && this.serverAgentList.some((a) => a.id === advertisedDefault)
+          ? advertisedDefault
+          : (this.serverAgentList[0]?.id ?? null);
       this.setState("connected", `Connected to ${String(frame.serverName ?? "bridge")}`);
       return;
     }

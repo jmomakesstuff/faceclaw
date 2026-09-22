@@ -6,6 +6,12 @@ export type Conversation = {
   id: string;
   model: AssistantModel;
   reasoning: ReasoningLevel;
+  /**
+   * Which of an external bridge's agents answers this conversation. Unset
+   * means the bridge's own default, which is also every conversation saved
+   * before there was anything to pick.
+   */
+  agentId?: string;
   session: AssistantSession | null;
   history?: AssistantSessionHistory;
 };
@@ -31,7 +37,12 @@ export class AssistantConversations {
           typeof record.id === "string" && ASSISTANT_MODEL_VALUES.includes(record.model) &&
           ["default", "low", "medium", "high"].includes(record.reasoning) &&
           Array.isArray(record.history?.messages) && Array.isArray(record.history?.transcript),
-        ).map((record) => ({ ...record, model: supportedAssistantModel(record.model), session: null }));
+        ).map((record) => ({
+          ...record,
+          model: supportedAssistantModel(record.model),
+          agentId: typeof record.agentId === "string" && record.agentId ? record.agentId : undefined,
+          session: null,
+        }));
         this.selectedId = data.selectedId;
       }
     } catch { /* First launch or invalid saved state. */ }
@@ -72,6 +83,24 @@ export class AssistantConversations {
     this.changed();
     return true;
   }
+  /**
+   * Point this conversation at one of the bridge's agents. Unlike `configure`
+   * this touches no local model, so it is the one knob External mode has.
+   */
+  configureAgent(agentId: string | undefined): boolean {
+    const record = this.current();
+    if (record.session?.isTurnActive()) return false;
+    record.agentId = agentId;
+    // The live session captured the old agent at construction; drop it so the
+    // next turn is built against the new one. History is kept on the record.
+    if (record.session) {
+      record.history = record.session.history();
+      record.session = null;
+    }
+    this.changed(true);
+    return true;
+  }
+
   configure(model: AssistantModel, reasoning: ReasoningLevel): boolean {
     const record = this.current();
     if (record.session?.isTurnActive() || !this.resolve(model, reasoning)) return false;
@@ -87,7 +116,7 @@ export class AssistantConversations {
     const config = this.resolve(record.model, record.reasoning);
     if (!config) return null;
     if (!record.session) {
-      record.session = new AssistantSession(config, undefined, record.history, record.id);
+      record.session = new AssistantSession(config, undefined, record.history, record.id, record.agentId);
       record.session.onChanged(() => this.changed(!record.session!.isTurnActive()));
     } else record.session.configure(config);
     return record.session;

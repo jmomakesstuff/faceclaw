@@ -296,9 +296,9 @@ frames, three multiplexed channels:
 ```
 { v: 1, chan: "ctl" | "chat" | "mcp", ... }
 
-ctl:  hello {deviceName, token, capabilities}, hello-ack {capabilities},
-      ping/pong, error
-chat: utterance {turnId, text, ctx, conversationId?}   (phone -> agent)
+ctl:  hello {deviceName, token, capabilities},
+      hello-ack {capabilities, agents?, agentId?}, ping/pong, error
+chat: utterance {turnId, text, ctx, conversationId?, agentId?}  (phone -> agent)
       text-delta {turnId, text}            (agent -> phone)
       tool-activity {turnId, label}        (agent -> phone, optional status)
       turn-done {turnId, stopReason} / turn-error {turnId, message}
@@ -320,6 +320,21 @@ Switch session drive the bridge's sessions instead of being greyed out; the
 model stays the bridge's. A bridge without the capability gets no
 `conversationId` and the phone keeps its single conversation, exactly as
 before.
+
+**Agents.** A bridge whose `capabilities` include `"agents"` also puts its
+roster in hello-ack: `agents: [{id, label}]` and `agentId`, the one it uses
+when an utterance names none. AI Chat's **Model** row becomes the agent
+picker in External mode — the phone has no model of its own to offer there —
+and the chosen id rides on each utterance as `agentId`. The choice is kept
+per conversation, so switching back restores it. A bridge without the
+capability advertises no roster, the row stays disabled, and no `agentId` is
+ever sent.
+
+The bridge, not the phone, owns what a session is: on OpenClaw a session is
+*placed* on the agent that created it and refuses a turn from another one, so
+the bridge keys sessions by agent as well as conversation
+(`<sessionKey>:<agentId>:<conversationId>`). The phone only has to drop its
+live session when the agent changes, which it does.
 
 ### Agent-side adapters
 
