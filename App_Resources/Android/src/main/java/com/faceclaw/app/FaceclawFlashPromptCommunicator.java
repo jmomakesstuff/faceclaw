@@ -121,7 +121,8 @@ public class FaceclawFlashPromptCommunicator implements FaceclawBleListener {
         stopHeartbeat();
         try {
             bleManager.close();
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            Log.w(TAG, "close: ble manager close failed", e);
         }
     }
 
@@ -185,7 +186,10 @@ public class FaceclawFlashPromptCommunicator implements FaceclawBleListener {
                 }
                 try {
                     sendShutdown();
-                } catch (Exception ignored) {
+                } catch (Exception e) {
+                    // The lens is about to be torn down either way, but a shutdown that
+                    // never lands is why it can come back up in an odd state.
+                    Log.w(TAG, "sendShutdown failed", e);
                 }
                 if (!Boolean.TRUE.equals(approved)) {
                     emitResult(false);
@@ -412,7 +416,8 @@ public class FaceclawFlashPromptCommunicator implements FaceclawBleListener {
         stopHeartbeat();
         try {
             bleManager.close();
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            Log.w(TAG, "teardown: ble manager close failed", e);
         }
         rightConnected = false;
         leftConnected = false;
@@ -518,6 +523,8 @@ public class FaceclawFlashPromptCommunicator implements FaceclawBleListener {
 
     private void emitState(String state, String detail) {
         final String safeDetail = detail == null ? "" : detail;
+        // Listener-only until now, so a prompt that never appeared left no trace in a log.
+        Log.i(TAG, "state=" + state + (safeDetail.isEmpty() ? "" : " -- " + safeDetail));
         mainHandler.post(() -> {
             FaceclawFlashPromptListener current = listener;
             if (current != null) {
@@ -536,6 +543,7 @@ public class FaceclawFlashPromptCommunicator implements FaceclawBleListener {
     }
 
     private void emitResult(boolean approvedResult) {
+        Log.i(TAG, "result=" + (approvedResult ? "approved" : "declined"));
         mainHandler.post(() -> {
             FaceclawFlashPromptListener current = listener;
             if (current != null) {
