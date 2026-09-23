@@ -124,9 +124,16 @@ export class EvenHubStoreLayer implements Layer {
   paint(ctx: LayerContext): GrayImage {
     if (!this.started) {
       this.started = true;
-      if (this.showingLogin) {
-        this.openCredentialEditor(ctx);
-      } else {
+      // Do NOT open the phone credential editor here. This runs on the first
+      // paint, which includes the restore of a still-open EvenHub at app
+      // startup -- so an unfinished sign-in re-opened the form on every launch,
+      // and the form has no way out: it has no Cancel control, its onCancel is
+      // dropped before it reaches the controller, and Back leaves the app
+      // rather than closing it. The login pane already says "Enter your Even
+      // account email and password in the phone app" and already opens the
+      // editor on click (handleInput), so the editor is still one tap away for
+      // someone who actually wants it.
+      if (!this.showingLogin) {
         void this.ensureTabLoaded(ctx, this.activeTab);
       }
     }
