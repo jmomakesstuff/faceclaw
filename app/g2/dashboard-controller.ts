@@ -1007,6 +1007,18 @@ class DashboardController {
    * charging and silent mode both make the display unavailable while BLE stays
    * up, and a battery that just ran out simply stops answering.
    */
+  /**
+   * Drop a stale silent-mode belief when the glasses do something they could
+   * not do in silent mode. The firmware blanks the display and ignores input
+   * while silent, so input or a presented frame is direct evidence it ended.
+   */
+  private clearSilentModeOnEvidence(reason: string): void {
+    if (!this.silentMode) return;
+    this.silentMode = false;
+    this.appendLog(`silent mode cleared: ${reason}`);
+    this.emit();
+  }
+
   private displayPreviewMessage(): string {
     if (this.phase === "charging") {
       return this.glassesDisplayLabel();
@@ -1405,6 +1417,12 @@ class DashboardController {
         }
       });
       this.offRing = communicator.onRingEvent((event) => {
+        // Input is proof silent mode ended: the firmware ignores all input while
+        // it is on, so one cannot arrive in that state. silentMode is otherwise
+        // cleared only on a disconnect, on the assumption that the firmware
+        // re-reports it, so a toggle made on the glasses without the link ever
+        // dropping leaves the phone claiming silent mode indefinitely.
+        this.clearSilentModeOnEvidence("input from the glasses");
         void this.handleInputEvent(event).catch((error) => {
           const message = this.formatError(error);
           this.appendLog(`input handler failed: ${message}`);
@@ -2509,6 +2527,9 @@ class DashboardController {
       frameTimings.finishFrame(frameId, "discarded: shell render with no display target");
       return;
     }
+    // A display target is standing, which silent mode does not leave in place.
+    // Evidence enough to drop the flag even if the user never touches the glasses.
+    this.clearSilentModeOnEvidence("the glasses are presenting frames");
     // A shell overlay that dims what it covers (a context menu) must dim the
     // window surfaces too, which live below the shell surface in the
     // compositor: forward the factor before this frame composites.
