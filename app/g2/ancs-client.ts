@@ -269,7 +269,7 @@ export class AncsClient {
       } else {
         const packageName = attrs.get(0)!, title = attrs.get(1)!, text = attrs.get(3)!
         this.notifications.set(uid,{key,packageName,appName:this.appNames.get(packageName) || fallbackAppName(packageName),title,text,bigText:text,
-          subText:'',infoText:'',summaryText:'',category:String(source.category),lines:[],postTime:source.postTime,when:source.postTime,actions:[],dismissLabel:'Hide on glasses'})
+          subText:'',infoText:'',summaryText:'',category:String(source.category),lines:[],postTime:source.postTime,when:source.postTime,actions:[],dismissLabel:'Hide on glasses',isGroupSummary:false})
         this.queue.unshift({uid,revision,metadata:true}); this.changed(key,false)
       }
     }

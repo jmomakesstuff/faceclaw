@@ -200,6 +200,7 @@ function normalizeNotification(value: any): AndroidNotification | null {
     lines: Array.isArray(value.lines) ? value.lines.map((line: unknown) => String(line)).filter(Boolean) : [],
     postTime: Number(value.postTime) || 0,
     when: Number(value.when) || 0,
+    isGroupSummary: Boolean(value.isGroupSummary),
     actions,
   };
 }

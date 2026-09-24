@@ -2550,6 +2550,21 @@ class DashboardController {
       this.requestShellRender();
       return;
     }
+    // A group summary is the container Android posts to stand in for a bundle;
+    // everything it represents is also posted in its own right, so opening a
+    // modal for it interrupts once for the container and again for each child.
+    // The container is also the emptier of the two: auto-generated summaries
+    // carry no text at all, and an app's own can be as little as a timestamp.
+    //
+    // Suppressed HERE and not at the listener, because the posted event is also
+    // what invalidates the icon caches and repaints the list; dropping the event
+    // would leave a stale tray and a list still showing notifications the phone
+    // has removed. The repaint below is the same one the filtered branch above
+    // keeps, and for the same reason.
+    if (notification.isGroupSummary) {
+      this.requestShellRender();
+      return;
+    }
     // New notifications open a shell modal over the app viewport; if the
     // screen was off, wake for it and go back to sleep when it is closed.
     // Waking while already on would steal focus, so only wake from sleep.

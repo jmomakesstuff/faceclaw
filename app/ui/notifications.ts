@@ -384,17 +384,22 @@ function drawDetailContent(
   }
   image.drawText(font, appLineX, 42, `${notification.appName || notification.packageName}  ${formatRelativeTime(notification.postTime)}`, 150);
 
+  // Every block below has already had anything that would repeat the headline
+  // removed, and the headline itself is empty when the notification carries no
+  // text at all -- the sender is on the line above, so naming it again here
+  // would just print the same word twice.
   const lines: string[] = [];
   const content = detailNotificationContent(notification);
-  lines.push(...wrapText(font, content.title, contentWidth));
+  if (content.title) {
+    lines.push(...wrapText(font, content.title, contentWidth));
+  }
   if (content.body) {
-    lines.push("");
+    if (lines.length) lines.push("");
     lines.push(...wrapText(font, content.body, contentWidth));
   }
-  const meta = [notification.subText, notification.infoText, notification.summaryText].filter(Boolean).join("  ");
-  if (meta) {
-    lines.push("");
-    lines.push(...wrapText(font, meta, contentWidth));
+  if (content.meta) {
+    if (lines.length) lines.push("");
+    lines.push(...wrapText(font, content.meta, contentWidth));
   }
 
   const step = lineStep(font);

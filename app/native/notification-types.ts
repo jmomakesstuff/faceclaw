@@ -5,6 +5,8 @@ export type AndroidNotification = {
   bigText: string; subText: string; infoText: string; summaryText: string;
   category: string; lines: string[]; postTime: number; when: number;
   actions: AndroidNotificationAction[]; dismissLabel?: string;
+  /** The bundle container Android posts alongside the notifications it stands for. */
+  isGroupSummary: boolean;
   /** Full message size reported by iOS, even when the fetched text is bounded. */
   messageSize?: number;
 };

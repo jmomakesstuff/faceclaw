@@ -91,13 +91,15 @@ function ui(fontSize = 12) {
   dependencies['./menu'] = load('app/ui/menu.ts', requireModule);
   const { SingleNotificationLayer } = load('app/ui/notifications.ts', requireModule);
   const { NotificationFilterLayer } = load('app/ui/notification-filter.ts', requireModule);
+  const { NotificationsListLayer } = load('app/ui/notifications.ts', requireModule);
   const ctx = { stack: { getBaseSize: () => ({ width: 540, height: 224 }), isFocused: () => true, pop: () => closes++ } };
   const popup = new SingleNotificationLayer('key', { origin: 'new-notification-modal', closeModal: () => closes++ });
   const listCard = new SingleNotificationLayer('key', { origin: 'notifications-list', closeModal: () => closes++ });
+  const list = new NotificationsListLayer();
   const filter = new NotificationFilterLayer();
   const paint = (layer) => layer.paint(ctx, () => new RecordingImage(540, 224));
   const input = (layer, type) => layer.handleInput({ type }, ctx);
-  return { prefs, popup, listCard, filter, paint, input, active: (value) => { active = value; },
+  return { prefs, popup, listCard, list, filter, paint, input, active: (value) => { active = value; },
     dismissals: () => dismissals, closes: () => closes };
 }
 
@@ -183,25 +185,56 @@ test('controller filters before waking or opening a popup, and still refreshes t
   assert.equal(popups, 1);
 });
 
-test('a notification with no title is headlined by its own text, never a placeholder', () => {
+// A notification is shown on two surfaces, and the bug these cover is the two
+// surfaces disagreeing about it. So each case paints BOTH and compares them,
+// rather than asserting on the card alone -- an assertion on one surface cannot
+// see a disagreement, which is how the placeholder survived in the first place.
+const notification = (fields) => ({
+  ...mail, key: 'key', title: '', text: '', bigText: '', subText: '', infoText: '',
+  summaryText: '', lines: [], actions: [], postTime: 0, isGroupSummary: false, ...fields,
+});
+const drawn = (app, layer) => app.paint(layer).texts.map(({ text }) => text);
+const countOf = (texts, needle) => texts.filter((text) => text.includes(needle)).length;
+
+for (const [name, fields, content] of [
+  ['only body text', { text: 'Garage unlocked' }, 'Garage unlocked'],
+  ['only summary text', { summaryText: '8:25 AM' }, '8:25 AM'],
+  ['only inbox lines', { lines: ['Alice: hi', 'Bob: yo'] }, 'Alice: hi'],
+  ['big text longer than the text', { text: 'short', bigText: 'the longer form' }, 'the longer form'],
+]) {
+  test(`a notification carrying ${name} reads the same on the card as in the list`, () => {
+    const app = ui();
+    app.active([notification(fields)]);
+    const card = drawn(app, app.popup);
+    const list = drawn(app, app.list);
+
+    // Neither surface may fall back to a placeholder while the notification has
+    // something to say.
+    assert.ok(!card.some((text) => text.includes('untitled')), `card: ${card.join(' | ')}`);
+    assert.ok(!list.some((text) => text.includes('untitled')), `list: ${list.join(' | ')}`);
+
+    // Both show the content, and the card shows it exactly once: the headline
+    // falls back to the body, so drawing the body again would repeat it.
+    assert.ok(card.some((text) => text.includes(content)), `card: ${card.join(' | ')}`);
+    assert.ok(list.some((text) => text.includes(content)), `list: ${list.join(' | ')}`);
+    assert.equal(countOf(card, content), 1, `card repeated the headline: ${card.join(' | ')}`);
+  });
+}
+
+test('a notification with nothing in it names its sender once, not twice', () => {
   const app = ui();
-  // Plenty of apps post everything in the body and leave the title empty; a
-  // calendar reminder carrying only a time is the common real case.
-  app.active([{ ...mail, key: 'key', title: '', text: 'Garage unlocked', bigText: '',
-    lines: [], actions: [], postTime: 0 }]);
-  const texts = app.paint(app.popup).texts.map(({ text }) => text);
-  assert.ok(!texts.some((text) => text.includes('untitled')),
-    `card drew a placeholder headline: ${texts.join(' | ')}`);
-  // Shown once: the headline falls back to the body, so printing the body again
-  // underneath would say the same thing twice.
-  assert.equal(texts.filter((text) => text.includes('Garage unlocked')).length, 1);
+  app.active([notification({})]);
+  const card = drawn(app, app.popup);
+  // The card already prints the sender on its own line, so a headline falling
+  // back to the app name would say the same word twice and read as a glitch.
+  assert.equal(countOf(card, 'Mail'), 1, `card: ${card.join(' | ')}`);
 });
 
 test('the ignore-source option is offered from the popup but not from the list', () => {
   const app = ui();
-  const offered = (layer) => app.paint(layer).texts.some(({ text }) => text.includes("Don't show"));
+  const offered = (layer) => drawn(app, layer).some((text) => text.includes("Don't show"));
   assert.equal(offered(app.popup), true);
   // Opening the same notification from the list offers no way to silence its
-  // app, so the only route to that choice is catching the popup while it is up.
+  // app, so that choice is reachable only by catching the popup while it is up.
   assert.equal(offered(app.listCard), false);
 });
