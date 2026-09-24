@@ -73,7 +73,11 @@ public class FaceclawMediaNotificationListenerService extends NotificationListen
             forgetActiveNotificationWakeKey(statusBarNotification);
             return;
         }
-        if (shouldEmitNotificationPosted(statusBarNotification)) {
+        // Record the key either way -- a summary is still an active notification --
+        // but never announce one, because announcing opens a modal over whatever
+        // the wearer is doing. See isGroupSummary.
+        boolean posted = shouldEmitNotificationPosted(statusBarNotification);
+        if (posted && !isGroupSummary(statusBarNotification)) {
             emitNotificationPosted(statusBarNotification.getKey());
         }
     }
@@ -377,11 +381,27 @@ public class FaceclawMediaNotificationListenerService extends NotificationListen
         if (!shouldShowNotificationInList(service, statusBarNotification)) {
             return false;
         }
-        Notification notification = statusBarNotification.getNotification();
-        if ((notification.flags & Notification.FLAG_GROUP_SUMMARY) != 0) {
+        if (isGroupSummary(statusBarNotification)) {
             return false;
         }
         return true;
+    }
+
+    /**
+     * A group summary is the container Android posts to stand in for a bundle of
+     * notifications from one app. Everything it represents is also posted in its
+     * own right, so treating it as an event of its own announces the same thing
+     * twice: once for the container and again for each child.
+     *
+     * It is fine in the list, where it is one line among many. It must not open a
+     * modal over the wearer's view, and it must not light an icon. A summary also
+     * frequently has nothing worth interrupting for: the ones Android
+     * auto-generates carry no text at all, and an app's own can be as little as a
+     * timestamp, which renders as a card with no readable content in it.
+     */
+    private static boolean isGroupSummary(StatusBarNotification statusBarNotification) {
+        Notification notification = statusBarNotification.getNotification();
+        return notification != null && (notification.flags & Notification.FLAG_GROUP_SUMMARY) != 0;
     }
 
     private static boolean shouldShowNotificationInList(FaceclawMediaNotificationListenerService service, StatusBarNotification statusBarNotification) {
