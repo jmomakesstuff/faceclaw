@@ -81,6 +81,7 @@ function ui(fontSize = 12) {
     '../native/notification-access': { isNotificationListenerEnabled: () => true },
     '../util/render-freshness': { renderPassAllowsStaleData: () => false },
     './metrics': load('app/ui/metrics.ts'),
+    './notification-text': load('app/ui/notification-text.ts', () => ({})),
     './gestures': {},
   };
   const requireModule = (name) => {
@@ -92,10 +93,11 @@ function ui(fontSize = 12) {
   const { NotificationFilterLayer } = load('app/ui/notification-filter.ts', requireModule);
   const ctx = { stack: { getBaseSize: () => ({ width: 540, height: 224 }), isFocused: () => true, pop: () => closes++ } };
   const popup = new SingleNotificationLayer('key', { origin: 'new-notification-modal', closeModal: () => closes++ });
+  const listCard = new SingleNotificationLayer('key', { origin: 'notifications-list', closeModal: () => closes++ });
   const filter = new NotificationFilterLayer();
   const paint = (layer) => layer.paint(ctx, () => new RecordingImage(540, 224));
   const input = (layer, type) => layer.handleInput({ type }, ctx);
-  return { prefs, popup, filter, paint, input, active: (value) => { active = value; },
+  return { prefs, popup, listCard, filter, paint, input, active: (value) => { active = value; },
     dismissals: () => dismissals, closes: () => closes };
 }
 
@@ -179,4 +181,27 @@ test('controller filters before waking or opening a popup, and still refreshes t
   await instance.handleAndroidNotificationPosted('key');
   assert.equal(wakes, 1);
   assert.equal(popups, 1);
+});
+
+test('a notification with no title is headlined by its own text, never a placeholder', () => {
+  const app = ui();
+  // Plenty of apps post everything in the body and leave the title empty; a
+  // calendar reminder carrying only a time is the common real case.
+  app.active([{ ...mail, key: 'key', title: '', text: 'Garage unlocked', bigText: '',
+    lines: [], actions: [], postTime: 0 }]);
+  const texts = app.paint(app.popup).texts.map(({ text }) => text);
+  assert.ok(!texts.some((text) => text.includes('untitled')),
+    `card drew a placeholder headline: ${texts.join(' | ')}`);
+  // Shown once: the headline falls back to the body, so printing the body again
+  // underneath would say the same thing twice.
+  assert.equal(texts.filter((text) => text.includes('Garage unlocked')).length, 1);
+});
+
+test('the ignore-source option is offered from the popup but not from the list', () => {
+  const app = ui();
+  const offered = (layer) => app.paint(layer).texts.some(({ text }) => text.includes("Don't show"));
+  assert.equal(offered(app.popup), true);
+  // Opening the same notification from the list offers no way to silence its
+  // app, so the only route to that choice is catching the popup while it is up.
+  assert.equal(offered(app.listCard), false);
 });

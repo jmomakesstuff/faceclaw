@@ -20,6 +20,11 @@ import { noteStaleDataUsed, renderPassAllowsStaleData } from "../util/render-fre
 import { type InputEvent } from "./gestures";
 import { type Layer, type LayerContext, type PaintBelow } from "./layers";
 import { MenuLayer } from "./menu";
+import {
+  detailNotificationContent,
+  notificationTitle,
+  primaryNotificationBody,
+} from "./notification-text";
 
 const PAGE_X = 12;
 const PAGE_Y = 12;
@@ -380,11 +385,11 @@ function drawDetailContent(
   image.drawText(font, appLineX, 42, `${notification.appName || notification.packageName}  ${formatRelativeTime(notification.postTime)}`, 150);
 
   const lines: string[] = [];
-  lines.push(...wrapText(font, notification.title || "(untitled)", contentWidth));
-  const body = detailNotificationBody(notification);
-  if (body) {
+  const content = detailNotificationContent(notification);
+  lines.push(...wrapText(font, content.title, contentWidth));
+  if (content.body) {
     lines.push("");
-    lines.push(...wrapText(font, body, contentWidth));
+    lines.push(...wrapText(font, content.body, contentWidth));
   }
   const meta = [notification.subText, notification.infoText, notification.summaryText].filter(Boolean).join("  ");
   if (meta) {
@@ -449,17 +454,3 @@ function buildDetailMenu(notification: AndroidNotification, origin: SingleNotifi
   ];
 }
 
-function primaryNotificationBody(notification: AndroidNotification): string {
-  const title = notificationTitle(notification);
-  const body = notification.bigText || notification.text || notification.lines.join(" / ") || notification.summaryText || "";
-  return body === title ? "" : body;
-}
-
-function detailNotificationBody(notification: AndroidNotification): string {
-  const lines = notification.lines.length ? notification.lines.join("\n") : "";
-  return [notification.bigText || notification.text, lines].filter(Boolean).join("\n");
-}
-
-function notificationTitle(notification: AndroidNotification): string {
-  return notification.title || notification.text || notification.summaryText || notification.appName || notification.packageName || "(untitled)";
-}
