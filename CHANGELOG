@@ -7,6 +7,15 @@
 * Add tokens and faceclaw-input script, which allows using a CLI utility as an input device for the glasses
 * Navigate app: Add map-without-destination mode
 
+### Bug Fixes
+
+* Notifications: a group summary no longer opens a notification card over the
+  glasses view. Android posts one alongside the notifications it stands for, so
+  the card appeared twice and the summary itself is often empty or just a
+  timestamp. Summaries still appear in the notification list.
+* Notifications: a notification with no title is now shown by its own text
+  rather than as "(untitled)", matching what the notification list already did
+
 ### iOS port:
 
 * Add iOS calendar integration
