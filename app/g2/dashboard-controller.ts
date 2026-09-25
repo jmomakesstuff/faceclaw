@@ -14,7 +14,7 @@ import * as frameTimings from "../native/frame-timings";
 import { startForegroundNotification, stopForegroundNotification, updateForegroundNotification } from "../native/foreground-service";
 import { mediaControllerBridge } from "../native/media-controller";
 import { nightscoutBridge } from "../native/nightscout-bridge";
-import { ALL_NOTIFICATIONS, onAndroidNotificationPosted, readActiveNotifications } from "../native/notification-icons";
+import { ALL_NOTIFICATIONS, onAndroidNotificationPosted, readActiveNotifications, readNotificationIconByKey, warmActiveNotificationIcons } from "../native/notification-icons";
 import { shouldShowNotificationOnGlasses } from "../native/notification-sources";
 import { openEvenAppSettings, readEvenAppNotificationState } from "../native/even-app-conflict";
 import { grayImageToPreviewSource } from "../native/gray-image-preview";
@@ -2545,14 +2545,49 @@ class DashboardController {
   }
 
   private async handleAndroidNotificationPosted(notificationKey: string): Promise<void> {
+    // Refill the top bar's icon cache before ANY path below repaints. The
+    // posted event invalidates it, so whichever repaint runs next would
+    // otherwise paint the bar from a cold cache. This sits above the filtered
+    // early return on purpose: the bar shows what is in the phone's tray,
+    // which changes even for a notification the wearer has chosen to hide.
+    warmActiveNotificationIcons();
     const notification = readActiveNotifications(ALL_NOTIFICATIONS).find((item) => item.key === notificationKey);
     if (!notification || !shouldShowNotificationOnGlasses(notification.packageName)) {
+      this.requestShellRender();
+      return;
+    }
+    // Android REQUIRES an app to post a notification while it runs a foreground
+    // service, and messaging apps run one to deliver. The wearer gets a card
+    // reading "<App> is doing work in the background", which says nothing about
+    // the message arriving, and it reliably beats the real notification to the
+    // screen, so the interruption OPENS with the placeholder.
+    //
+    // Suppressed HERE, at the modal, not at the listener: the posted event also
+    // invalidates the icon caches and repaints the tray, so dropping it upstream
+    // would leave a stale bar. The early return keeps the repaint, exactly as
+    // the branch above does for a source the wearer has silenced.
+    if (notification.isForegroundService) {
+      this.requestShellRender();
+      return;
+    }
+    // A group summary is the container Android posts to stand in for a bundle
+    // from one app. Everything it represents is also posted in its own right,
+    // so opening a card for the container interrupts once for the container and
+    // again for each child. The container is also the emptier of the two:
+    // auto-generated summaries carry no text at all.
+    if (notification.isGroupSummary) {
       this.requestShellRender();
       return;
     }
     // New notifications open a shell modal over the app viewport; if the
     // screen was off, wake for it and go back to sleep when it is closed.
     // Waking while already on would steal focus, so only wake from sleep.
+    // Fetch the icon HERE rather than letting the card's first paint ask for
+    // it. A paint may run in allow-stale mode so the frame out of sleep is
+    // never blocked on a slow source; warming it here keeps that protection
+    // and still gives the first paint something to draw.
+    readNotificationIconByKey(notificationKey, false);
+
     const wokeScreen = shell.isScreenOn() ? false : shell.wake("sidebar");
     if (wokeScreen) {
       this.appendLog("android notification woke the screen");

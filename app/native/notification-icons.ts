@@ -19,13 +19,30 @@ const ICON_CACHE_MS = 60_000;
 let cachedIcons: GrayImage[] = [];
 let cachedAtMs = 0;
 const keyedIconCache = new Map<string, { icon: GrayImage | null; atMs: number }>();
+//: The last maxIcons the top bar asked for; 0 until it has painted once.
+let lastRequestedMaxIcons = 0;
 const KEYED_ICON_CACHE_MAX = 128;
 let notificationListenerProxy: any | null = null;
 const notificationPostedListeners = new Set<(notificationKey: string) => void>();
 
 function invalidateIconCaches(): void {
+  // EXPIRE both caches; do not destroy either. The tray cache already worked
+  // this way (cachedAtMs = 0 keeps cachedIcons), but the keyed cache used to
+  // .clear(), and that asymmetry is a visible defect: a paint running in
+  // allow-stale mode returns whatever is cached, so an expired entry still
+  // draws the previous icon while a DELETED one draws nothing at all.
+  //
+  // Notifications post far more often than the icon behind a key changes -- in
+  // practice it never changes for the life of a key -- so the previous icon is
+  // the right thing to show for the one frame before the refetch lands.
+  //
+  // Measured on hardware across four capture rounds: the card's icon appeared,
+  // vanished for one frame of 680-940ms, then came back, in three of the four.
+  // Every instance was a stale paint landing between this call and the refetch.
   cachedAtMs = 0;
-  keyedIconCache.clear();
+  for (const entry of keyedIconCache.values()) {
+    entry.atMs = 0;
+  }
 }
 
 import type { AndroidNotification, AndroidNotificationAction } from "./notification-types";
@@ -48,6 +65,12 @@ export type NotificationIconsResult = {
 export function readActiveNotificationIcons(maxIcons: number, allowStale: boolean): NotificationIconsResult {
   if (!global.isAndroid || maxIcons <= 0) return { icons: [], stale: false };
 
+  // How many the top bar had room for last time it painted.
+  // warmActiveNotificationIcons refetches at this count: the cache does not
+  // record the maxIcons it was filled with, so warming at a guess risks
+  // caching a SHORT list as fresh and silently dropping icons the bar had
+  // room for.
+  lastRequestedMaxIcons = maxIcons;
   const now = Date.now();
   if (cachedAtMs > 0 && now - cachedAtMs < ICON_CACHE_MS) {
     logCurrent("notification icons served from cache");
@@ -129,6 +152,23 @@ export function readNotificationIconByKey(key: string, allowStale: boolean): Not
   return { icon: icon?.clone() ?? null, stale: false };
 }
 
+/**
+ * Fetch the tray icons now, so the next paint finds them cached rather than
+ * painting an empty bar and popping them in on the follow-up repaint.
+ *
+ * Call this OFF the paint path (the notification-posted event), never from a
+ * render: the point of the allow-stale contract is that a paint is free to
+ * decline to block on this, and warming here does not weaken that.
+ *
+ * A no-op until the bar has painted at least once, because until then there is
+ * no honest count to fetch at -- one stale paint on the first notification
+ * after launch is the accepted cost of not guessing.
+ */
+export function warmActiveNotificationIcons(): void {
+  if (!global.isAndroid || lastRequestedMaxIcons <= 0) return;
+  readActiveNotificationIcons(lastRequestedMaxIcons, false);
+}
+
 export function readActiveNotifications(maxNotifications = 50): AndroidNotification[] {
   if (!global.isAndroid || maxNotifications <= 0) return [];
   try {
@@ -188,6 +228,8 @@ function normalizeNotification(value: any): AndroidNotification | null {
     : [];
   return {
     key,
+    isGroupSummary: Boolean(value.isGroupSummary),
+    isForegroundService: Boolean(value.isForegroundService),
     packageName: String(value.packageName ?? ""),
     appName: String(value.appName ?? value.packageName ?? ""),
     title: String(value.title ?? ""),

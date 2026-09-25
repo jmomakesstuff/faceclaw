@@ -81,6 +81,7 @@ function ui(fontSize = 12) {
     '../native/notification-access': { isNotificationListenerEnabled: () => true },
     '../util/render-freshness': { renderPassAllowsStaleData: () => false },
     './metrics': load('app/ui/metrics.ts'),
+    './notification-text': load('app/ui/notification-text.ts', () => ({})),
     './gestures': {},
   };
   const requireModule = (name) => {
@@ -90,12 +91,15 @@ function ui(fontSize = 12) {
   dependencies['./menu'] = load('app/ui/menu.ts', requireModule);
   const { SingleNotificationLayer } = load('app/ui/notifications.ts', requireModule);
   const { NotificationFilterLayer } = load('app/ui/notification-filter.ts', requireModule);
+  const { NotificationsListLayer } = load('app/ui/notifications.ts', requireModule);
   const ctx = { stack: { getBaseSize: () => ({ width: 540, height: 224 }), isFocused: () => true, pop: () => closes++ } };
   const popup = new SingleNotificationLayer('key', { origin: 'new-notification-modal', closeModal: () => closes++ });
+  const listCard = new SingleNotificationLayer('key', { origin: 'notifications-list', closeModal: () => closes++ });
+  const list = new NotificationsListLayer();
   const filter = new NotificationFilterLayer();
   const paint = (layer) => layer.paint(ctx, () => new RecordingImage(540, 224));
   const input = (layer, type) => layer.handleInput({ type }, ctx);
-  return { prefs, popup, filter, paint, input, active: (value) => { active = value; },
+  return { prefs, popup, listCard, list, filter, paint, input, active: (value) => { active = value; },
     dismissals: () => dismissals, closes: () => closes };
 }
 
@@ -160,10 +164,13 @@ test('controller filters before waking or opening a popup, and still refreshes t
   const handler = controller.members.find((node) => node.name?.getText(file) === 'handleAndroidNotificationPosted');
   const prefs = store();
   let wakes = 0, popups = 0, renders = 0;
+  const iconFetches = [];
   const { Harness } = evaluate(`export class Harness { ${handler.getText(file)} }`, null, {
     ALL_NOTIFICATIONS: 0x7fffffff,
     readActiveNotifications: () => [{ ...mail, key: 'key' }],
     shouldShowNotificationOnGlasses: prefs.shouldShowNotificationOnGlasses,
+    readNotificationIconByKey: (key, allowStale) => { iconFetches.push([key, allowStale]); return { icon: null, stale: false }; },
+    warmActiveNotificationIcons: () => {},
     shell: { isScreenOn: () => false, wake: () => { wakes++; return true; }, openNotificationModal: () => popups++ },
   });
   const instance = new Harness();
@@ -179,4 +186,207 @@ test('controller filters before waking or opening a popup, and still refreshes t
   await instance.handleAndroidNotificationPosted('key');
   assert.equal(wakes, 1);
   assert.equal(popups, 1);
+  // The icon is fetched before the card opens, and NOT in allow-stale mode: a
+  // paint may decline to block on a cold icon, so warming it here is what stops
+  // the card opening blank and popping an icon in a repaint later. Nothing is
+  // fetched for a notification that was filtered out.
+  assert.deepEqual(iconFetches, [['key', false]]);
+});
+
+// A notification is shown on two surfaces, and the bug these cover is the two
+// surfaces disagreeing about it. So each case paints BOTH and compares them,
+// rather than asserting on the card alone -- an assertion on one surface cannot
+// see a disagreement, which is how the placeholder survived in the first place.
+const notification = (fields) => ({
+  ...mail, key: 'key', title: '', text: '', bigText: '', subText: '', infoText: '',
+  summaryText: '', lines: [], actions: [], postTime: 0, isGroupSummary: false, ...fields,
+});
+const drawn = (app, layer) => app.paint(layer).texts.map(({ text }) => text);
+const countOf = (texts, needle) => texts.filter((text) => text.includes(needle)).length;
+
+for (const [name, fields, content] of [
+  ['only body text', { text: 'Garage unlocked' }, 'Garage unlocked'],
+  ['only summary text', { summaryText: '8:25 AM' }, '8:25 AM'],
+  ['only inbox lines', { lines: ['Alice: hi', 'Bob: yo'] }, 'Alice: hi'],
+  ['big text longer than the text', { text: 'short', bigText: 'the longer form' }, 'the longer form'],
+]) {
+  test(`a notification carrying ${name} reads the same on the card as in the list`, () => {
+    const app = ui();
+    app.active([notification(fields)]);
+    const card = drawn(app, app.popup);
+    const list = drawn(app, app.list);
+
+    // Neither surface may fall back to a placeholder while the notification has
+    // something to say.
+    assert.ok(!card.some((text) => text.includes('untitled')), `card: ${card.join(' | ')}`);
+    assert.ok(!list.some((text) => text.includes('untitled')), `list: ${list.join(' | ')}`);
+
+    // Both show the content, and the card shows it exactly once: the headline
+    // falls back to the body, so drawing the body again would repeat it.
+    assert.ok(card.some((text) => text.includes(content)), `card: ${card.join(' | ')}`);
+    assert.ok(list.some((text) => text.includes(content)), `list: ${list.join(' | ')}`);
+    assert.equal(countOf(card, content), 1, `card repeated the headline: ${card.join(' | ')}`);
+  });
+}
+
+test('a notification with nothing in it names its sender once, not twice', () => {
+  const app = ui();
+  app.active([notification({})]);
+  const card = drawn(app, app.popup);
+  // The card already prints the sender on its own line, so a headline falling
+  // back to the app name would say the same word twice and read as a glitch.
+  assert.equal(countOf(card, 'Mail'), 1, `card: ${card.join(' | ')}`);
+});
+
+test('the ignore-source option is offered from the popup but not from the list', () => {
+  const app = ui();
+  const offered = (layer) => drawn(app, layer).some((text) => text.includes("Don't show"));
+  assert.equal(offered(app.popup), true);
+  // Opening the same notification from the list offers no way to silence its
+  // app, so that choice is reachable only by catching the popup while it is up.
+  assert.equal(offered(app.listCard), false);
+});
+
+test('invalidating the icon caches expires them, so a stale paint keeps the last icon', () => {
+  // The two caches used to disagree: the tray one was EXPIRED (cachedAtMs = 0,
+  // entries kept) while the keyed one was DESTROYED (.clear()). A paint running
+  // in allow-stale mode returns whatever is cached, so the expired cache still
+  // drew the previous icon while the cleared one drew nothing -- the card's
+  // icon appeared, vanished for one frame, then came back. Measured on hardware
+  // in three of four capture rounds, at 680-940ms per vanish.
+  const src = source('app/native/notification-icons.ts');
+  const body = src.slice(src.indexOf('function invalidateIconCaches'));
+  const fn = body.slice(0, body.indexOf('\n}') + 2);
+  assert.ok(!/keyedIconCache\.clear\(\)/.test(fn),
+    'invalidateIconCaches must not destroy the keyed cache; expire it instead');
+  assert.ok(/entry\.atMs = 0/.test(fn),
+    'invalidateIconCaches must expire each keyed entry so stale reads still find an icon');
+  assert.ok(/cachedAtMs = 0/.test(fn),
+    'the tray cache must still be expired too');
+
+  // And the reader must actually hand back an expired entry under allowStale.
+  const reader = src.slice(src.indexOf('export function readNotificationIconByKey'));
+  const stale = reader.slice(0, reader.indexOf('\n}') + 2);
+  assert.ok(/if \(allowStale\) \{\s*return \{ icon: cached\?\.icon\?\.clone\(\) \?\? null, stale: true \};/.test(stale),
+    'an allowStale read must return the cached icon when one is still present');
+});
+
+test('a foreground-service notification repaints the tray but never opens a card', async () => {
+  // Android REQUIRES an app to post one of these while it runs a foreground
+  // service, and messaging apps run one to deliver. Measured on hardware: the
+  // card read "Messages is doing work in the background" and beat the real
+  // message to the screen by 660ms, so the interruption OPENED with a
+  // placeholder that says nothing about the message arriving.
+  const file = ts.createSourceFile('controller.ts', source('app/g2/dashboard-controller.ts'), ts.ScriptTarget.Latest, true);
+  const controller = file.statements.find((node) => ts.isClassDeclaration(node) && node.name.text === 'DashboardController');
+  const handler = controller.members.find((node) => node.name?.getText(file) === 'handleAndroidNotificationPosted');
+  const prefs = store();
+
+  const run = (isForegroundService) => {
+    let wakes = 0, popups = 0, renders = 0;
+    const { Harness } = evaluate(`export class Harness { ${handler.getText(file)} }`, null, {
+      ALL_NOTIFICATIONS: 0x7fffffff,
+      readActiveNotifications: () => [{ ...mail, key: 'key', isForegroundService }],
+      shouldShowNotificationOnGlasses: prefs.shouldShowNotificationOnGlasses,
+      readNotificationIconByKey: () => ({ icon: null, stale: false }),
+      warmActiveNotificationIcons: () => {},
+      shell: { isScreenOn: () => false, wake: () => { wakes++; return true; },
+               openNotificationModal: () => popups++ },
+    });
+    const instance = new Harness();
+    instance.requestShellRender = () => { renders++; };
+    instance.appendLog = () => {};
+    return instance.handleAndroidNotificationPosted('key').then(() => ({ wakes, popups, renders }));
+  };
+
+  // Suppressed: no card, and critically no WAKE either -- this must not light
+  // up the display for a notification addressed to the system.
+  const suppressed = await run(true);
+  assert.equal(suppressed.popups, 0);
+  assert.equal(suppressed.wakes, 0);
+  // The tray still repaints, because the posted event invalidated its cache.
+  assert.equal(suppressed.renders, 1);
+
+  // An ordinary notification is unaffected.
+  const normal = await run(false);
+  assert.equal(normal.popups, 1);
+  assert.equal(normal.wakes, 1);
+});
+
+test('the top bar icon cache is refilled before any repaint, including for a filtered notification', async () => {
+  // The posted event invalidates the tray cache, so whichever repaint runs next
+  // paints from an empty one and pops the icons in on the follow-up. The warm
+  // must therefore sit ABOVE the filtered early return: the bar reflects the
+  // phone's tray, which changes even for a notification the wearer has hidden.
+  const file = ts.createSourceFile('controller.ts', source('app/g2/dashboard-controller.ts'), ts.ScriptTarget.Latest, true);
+  const controller = file.statements.find((node) => ts.isClassDeclaration(node) && node.name.text === 'DashboardController');
+  const handler = controller.members.find((node) => node.name?.getText(file) === 'handleAndroidNotificationPosted');
+  const prefs = store();
+  prefs.setNotificationSourceEnabled(mail, false);
+  const order = [];
+  const { Harness } = evaluate(`export class Harness { ${handler.getText(file)} }`, null, {
+    ALL_NOTIFICATIONS: 0x7fffffff,
+    readActiveNotifications: () => [{ ...mail, key: 'key' }],
+    shouldShowNotificationOnGlasses: prefs.shouldShowNotificationOnGlasses,
+    readNotificationIconByKey: () => ({ icon: null, stale: false }),
+    warmActiveNotificationIcons: () => order.push('warm'),
+    shell: { isScreenOn: () => true, wake: () => false, openNotificationModal: () => {} },
+  });
+  const instance = new Harness();
+  instance.requestShellRender = () => order.push('render');
+  await instance.handleAndroidNotificationPosted('key');
+  // Filtered out, so it never opens a card -- but the bar still repaints, and
+  // the warm has to come first or that repaint is the one that pops.
+  assert.deepEqual(order, ['warm', 'render']);
+});
+
+test('the top bar never draws more notification icons than it measured room for', () => {
+  // The icon cache is not keyed by maxIcons, so one filled while the bar was
+  // wider (a shorter clock, a narrower battery cluster) would spill past the
+  // tray on the next narrower paint.
+  const file = ts.createSourceFile('chrome.ts', source('app/ui/shell/chrome-layer.ts'), ts.ScriptTarget.Latest, true);
+  const text = file.getText();
+  const loop = text.slice(text.indexOf('const drawn = Math.min'));
+  assert.ok(loop.startsWith('const drawn = Math.min(icons.length, maxIcons);'),
+    'the draw count must be clamped to maxIcons');
+  assert.ok(/for \(let index = 0; index < drawn; index\+\+\)/.test(loop),
+    'the draw loop must iterate the clamped count, not icons.length');
+});
+
+test('a notification card closing does not sleep the screen when another card replaced it', () => {
+  // Two apps posting for one message (an SMS also bridged to a chat app) put a
+  // second modal on top of the first. When the first auto-closes, popIfTop
+  // matches nothing and returns false -- and sleeping on that path blanks the
+  // display out from under the card the wearer is actually reading, which the
+  // next render then wakes straight back up. Measured on hardware as a fully
+  // dark frame standing for 760ms and 1330ms in two captures.
+  const file = ts.createSourceFile('shell.ts', source('app/ui/shell/shell.ts'), ts.ScriptTarget.Latest, true);
+  const shellClass = file.statements.find((node) => ts.isClassDeclaration(node) && node.members?.some(
+    (m) => m.name?.getText(file) === 'closeNotificationModal'));
+  const method = shellClass.members.find((node) => node.name?.getText(file) === 'closeNotificationModal');
+  const { Harness } = evaluate(`export class Harness { ${method.getText(file)} }`, null, {});
+
+  const run = ({ topMatches, wokeScreen }) => {
+    let sleeps = 0, renders = 0, popped = 0;
+    const modal = { id: 'modal' };
+    const instance = new Harness();
+    instance.stack = { popIfTop: (predicate) => {
+      if (!topMatches) return false;
+      popped++; return predicate(modal);
+    } };
+    instance.sleep = () => { sleeps++; };
+    instance.config = { requestShellRender: () => { renders++; } };
+    instance.closeNotificationModal(modal, wokeScreen);
+    return { sleeps, renders, popped };
+  };
+
+  // The card that woke the screen IS the one on screen: closing it sleeps.
+  assert.deepEqual(run({ topMatches: true, wokeScreen: true }).sleeps, 1);
+  // Another card is on top, so this close pops nothing and must NOT sleep.
+  assert.deepEqual(run({ topMatches: false, wokeScreen: true }).sleeps, 0);
+  // A card that did not wake the screen never sleeps it either way.
+  assert.deepEqual(run({ topMatches: true, wokeScreen: false }).sleeps, 0);
+  assert.deepEqual(run({ topMatches: false, wokeScreen: false }).sleeps, 0);
+  // The repaint is unconditional: the stack changed shape either way.
+  assert.equal(run({ topMatches: false, wokeScreen: true }).renders, 1);
 });

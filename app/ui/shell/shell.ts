@@ -672,8 +672,16 @@ class Shell {
   }
 
   private closeNotificationModal(modal: ShellModalLayer, wokeScreen: boolean): void {
-    this.stack.popIfTop((layer) => layer === modal);
-    if (wokeScreen) {
+    const closed = this.stack.popIfTop((layer) => layer === modal);
+    // Sleep only if THIS modal was the one on screen. A notification arriving
+    // while a card is already up pushes its own modal on top, so this close can
+    // fire for a card the wearer stopped looking at a second ago -- popIfTop
+    // then matches nothing and returns false. Sleeping on that path blanks the
+    // display out from under the card that replaced it, and the next render
+    // wakes it straight back up: a visible off-then-on blink mid-notification.
+    // Two apps posting for one message (an SMS also bridged to a chat app, say)
+    // hit this every time.
+    if (wokeScreen && closed) {
       this.sleep();
     }
     this.config.requestShellRender();
