@@ -247,28 +247,46 @@ test('the ignore-source option is offered from the popup but not from the list',
   assert.equal(offered(app.listCard), false);
 });
 
-test('invalidating the icon caches expires them, so a stale paint keeps the last icon', () => {
-  // The two caches used to disagree: the tray one was EXPIRED (cachedAtMs = 0,
-  // entries kept) while the keyed one was DESTROYED (.clear()). A paint running
-  // in allow-stale mode returns whatever is cached, so the expired cache still
-  // drew the previous icon while the cleared one drew nothing -- the card's
-  // icon appeared, vanished for one frame, then came back. Measured on hardware
-  // in three of four capture rounds, at 680-940ms per vanish.
-  const src = source('app/native/notification-icons.ts');
-  const body = src.slice(src.indexOf('function invalidateIconCaches'));
-  const fn = body.slice(0, body.indexOf('\n}') + 2);
-  assert.ok(!/keyedIconCache\.clear\(\)/.test(fn),
-    'invalidateIconCaches must not destroy the keyed cache; expire it instead');
-  assert.ok(/entry\.atMs = 0/.test(fn),
-    'invalidateIconCaches must expire each keyed entry so stale reads still find an icon');
-  assert.ok(/cachedAtMs = 0/.test(fn),
-    'the tray cache must still be expired too');
+test('a stale read still finds the icon after the caches are invalidated', () => {
+  // Exercises the module rather than matching its source. Before the fix the
+  // tray cache was EXPIRED (entries kept) while the keyed cache was DESTROYED,
+  // so a paint running in allow-stale mode drew the previous tray icons and
+  // nothing for the card -- the icon appeared, vanished for a frame, came back.
+  let posted = null;
+  const iconBytes = new Uint8Array(24 * 24).fill(200);
+  const com = { faceclaw: { app: {
+    FaceclawMediaNotificationListenerService: {
+      getNotificationIconGrayForKey: () => iconBytes,
+      getActiveNotificationIconGrays: () => iconBytes,
+      getActiveNotificationsJson: () => '[]',
+      addNotificationListener: () => {},
+      removeNotificationListener: () => {},
+    },
+    FaceclawNotificationListener: function (handlers) { posted = handlers.onNotificationPosted; },
+  } } };
+  const mod = evaluate(source('app/native/notification-icons.ts'), (name) => {
+    if (name.endsWith('image')) return { GrayImage: class { constructor(w, h) { this.pixels = new Uint8Array(w * h); } clone() { return this; } } };
+    if (name.endsWith('frame-timings')) return { logCurrent: () => {}, spanCurrent: (_n, fn) => fn() };
+    if (name.endsWith('array-util')) return { toUint8Array: (v) => v };
+    if (name.endsWith('notification-sources')) return { rememberNotificationSources: () => {} };
+    return {};
+  }, { global: { isAndroid: true }, com, setTimeout });
 
-  // And the reader must actually hand back an expired entry under allowStale.
-  const reader = src.slice(src.indexOf('export function readNotificationIconByKey'));
-  const stale = reader.slice(0, reader.indexOf('\n}') + 2);
-  assert.ok(/if \(allowStale\) \{\s*return \{ icon: cached\?\.icon\?\.clone\(\) \?\? null, stale: true \};/.test(stale),
-    'an allowStale read must return the cached icon when one is still present');
+  {
+    // Warm it: a non-stale read fetches and caches.
+    assert.ok(mod.readNotificationIconByKey('key', false).icon, 'expected a fetched icon');
+    // Registering the listener is what gives us the invalidation hook.
+    mod.onAndroidNotificationPosted(() => {});
+    assert.ok(posted, 'expected the native listener to be registered');
+
+    // A posted notification invalidates the caches.
+    posted('key');
+
+    // THE POINT: a paint that declines to block must still find the last icon.
+    const after = mod.readNotificationIconByKey('key', true);
+    assert.ok(after.icon, 'a stale read returned no icon: the keyed cache was destroyed, not expired');
+    assert.equal(after.stale, true, 'it should still report itself stale so a repaint follows');
+  }
 });
 
 test('a group summary repaints the tray but never opens a detail view', () => {
@@ -384,19 +402,45 @@ test('the top bar icon cache is refilled before any repaint, including for a fil
   assert.deepEqual(order, ['warm', 'render']);
 });
 
-test('the top bar never draws more notification icons than it measured room for', () => {
-  // The icon cache is not keyed by maxIcons, so one filled while the bar was
-  // wider (a shorter clock, a narrower battery cluster) would spill past the
-  // tray on the next narrower paint.
-  const file = ts.createSourceFile('chrome.ts', source('app/ui/shell/chrome-layer.ts'), ts.ScriptTarget.Latest, true);
-  const text = file.getText();
-  const loop = text.slice(text.indexOf('const drawn = Math.min'));
-  assert.ok(loop.startsWith('const drawn = Math.min(icons.length, maxIcons);'),
-    'the draw count must be clamped to maxIcons');
-  assert.ok(/for \(let index = 0; index < drawn; index\+\+\)/.test(loop),
-    'the draw loop must iterate the clamped count, not icons.length');
-});
+test('the top bar draws no more icons than the room it measured', () => {
+  // Runs the real draw block rather than matching its source. The icon cache is
+  // not keyed by maxIcons, so one filled while the bar was wider (a shorter
+  // clock, a narrower battery cluster) hands back more icons than the current
+  // paint has room for.
+  const src = source('app/ui/shell/chrome-layer.ts');
+  const open = src.indexOf('    if (maxIcons > 0) {');
+  let depth = 0, end = open;
+  for (let i = src.indexOf('{', open); i < src.length; i++) {
+    if (src[i] === '{') depth++;
+    else if (src[i] === '}' && --depth === 0) { end = i + 1; break; }
+  }
+  // The block is TypeScript (`icons[index]!`), so transpile before running it.
+  const block = ts.transpileModule(src.slice(open, end), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
+  }).outputText;
 
+  const run = (available, cached) => {
+    const drawnAt = [];
+    const image = { drawImage: (_icon, x) => drawnAt.push(x) };
+    const fn = new Function(
+      'maxIcons', 'image', 'readActiveNotificationIcons', 'renderPassAllowsStaleData',
+      'noteStaleDataUsed', 'NOTIFICATION_ICON_SIZE', 'TOP_BAR_HEIGHT', 'barTop', 'iconsX',
+      block,
+    );
+    fn(available, image, () => ({ icons: new Array(cached).fill({}), stale: false }),
+       () => false, () => {}, 16, 24, 0, 100);
+    return drawnAt;
+  };
+
+  // The cache holds more than this paint measured room for: clamp to the room.
+  assert.equal(run(3, 8).length, 3);
+  // Fewer cached than room: draw what there is, not the measured count.
+  assert.equal(run(8, 2).length, 2);
+  // Exactly enough.
+  assert.equal(run(4, 4).length, 4);
+  // And they step across the bar rather than piling up.
+  assert.deepEqual(run(3, 8), [100, 120, 140]);
+});
 test('a notification card closing does not sleep the screen when another card replaced it', () => {
   // Two apps posting for one message (an SMS also bridged to a chat app) put a
   // second modal on top of the first. When the first auto-closes, popIfTop
