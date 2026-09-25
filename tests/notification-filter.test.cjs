@@ -271,10 +271,54 @@ test('invalidating the icon caches expires them, so a stale paint keeps the last
     'an allowStale read must return the cached icon when one is still present');
 });
 
+test('a group summary repaints the tray but never opens a detail view', () => {
+  // The container Android posts to stand in for a bundle. Everything it
+  // represents is also posted in its own right, so opening a detail view for it
+  // interrupts once for the container and again for each child.
+  //
+  // Upstream already tests this flag for TRAY ICONS in
+  // shouldShowNotificationIcon; the path that opens a detail view did not, and
+  // that gap had no test until this one.
+  const file = ts.createSourceFile('controller.ts', source('app/g2/dashboard-controller.ts'), ts.ScriptTarget.Latest, true);
+  const controller = file.statements.find((node) => ts.isClassDeclaration(node) && node.name.text === 'DashboardController');
+  const handler = controller.members.find((node) => node.name?.getText(file) === 'handleAndroidNotificationPosted');
+  const prefs = store();
+
+  const run = (isGroupSummary) => {
+    let wakes = 0, popups = 0, renders = 0;
+    const { Harness } = evaluate(`export class Harness { ${handler.getText(file)} }`, null, {
+      ALL_NOTIFICATIONS: 0x7fffffff,
+      readActiveNotifications: () => [{ ...mail, key: 'key', isGroupSummary }],
+      shouldShowNotificationOnGlasses: prefs.shouldShowNotificationOnGlasses,
+      readNotificationIconByKey: () => ({ icon: null, stale: false }),
+      warmActiveNotificationIcons: () => {},
+      shell: { isScreenOn: () => false, wake: () => { wakes++; return true; },
+               openNotificationModal: () => popups++ },
+    });
+    const instance = new Harness();
+    instance.requestShellRender = () => { renders++; };
+    instance.appendLog = () => {};
+    return instance.handleAndroidNotificationPosted('key').then(() => ({ wakes, popups, renders }));
+  };
+
+  return Promise.all([run(true), run(false)]).then(([summary, ordinary]) => {
+    // Suppressed: no detail view, and no WAKE either -- a container must not
+    // light up a sleeping display.
+    assert.equal(summary.popups, 0);
+    assert.equal(summary.wakes, 0);
+    // The chrome still repaints, because the posted event already invalidated
+    // the icon caches before any of this ran.
+    assert.equal(summary.renders, 1);
+    // A notification of its own is unaffected.
+    assert.equal(ordinary.popups, 1);
+    assert.equal(ordinary.wakes, 1);
+  });
+});
+
 test('a foreground-service notification repaints the tray but never opens a card', async () => {
-  // Android REQUIRES an app to post one of these while it runs a foreground
-  // service, and messaging apps run one to deliver. Measured on hardware: the
-  // card read "Messages is doing work in the background" and beat the real
+  // startForeground() requires a notification on API 26+ and the platform sets
+  // FLAG_FOREGROUND_SERVICE on it. Measured on hardware: the detail view
+  // read "<App> is doing work in the background" and beat the real
   // message to the screen by 660ms, so the interruption OPENED with a
   // placeholder that says nothing about the message arriving.
   const file = ts.createSourceFile('controller.ts', source('app/g2/dashboard-controller.ts'), ts.ScriptTarget.Latest, true);

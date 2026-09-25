@@ -2556,25 +2556,33 @@ class DashboardController {
       this.requestShellRender();
       return;
     }
-    // Android REQUIRES an app to post a notification while it runs a foreground
-    // service, and messaging apps run one to deliver. The wearer gets a card
-    // reading "<App> is doing work in the background", which says nothing about
-    // the message arriving, and it reliably beats the real notification to the
-    // screen, so the interruption OPENS with the placeholder.
+    // startForeground() requires a notification on API 26+ and the platform
+    // sets FLAG_FOREGROUND_SERVICE on it. One of those opens a detail view
+    // reading "<App> is doing work in the background": addressed to the system,
+    // saying nothing about any message, and observed arriving before the real
+    // notification, so the interruption OPENS with the placeholder.
     //
-    // Suppressed HERE, at the modal, not at the listener: the posted event also
-    // invalidates the icon caches and repaints the tray, so dropping it upstream
-    // would leave a stale bar. The early return keeps the repaint, exactly as
-    // the branch above does for a source the wearer has silenced.
+    // Returning here rather than dropping the event in the listener. The native
+    // callback invalidates the icon caches before any of this runs, and the
+    // return below still repaints the chrome, exactly as the branch above does
+    // for a source the wearer has silenced.
     if (notification.isForegroundService) {
       this.requestShellRender();
       return;
     }
     // A group summary is the container Android posts to stand in for a bundle
     // from one app. Everything it represents is also posted in its own right,
-    // so opening a card for the container interrupts once for the container and
-    // again for each child. The container is also the emptier of the two:
-    // auto-generated summaries carry no text at all.
+    // so opening a detail view for the container interrupts once for the
+    // container and again for each child.
+    //
+    // Upstream already tests this flag for TRAY ICONS in
+    // shouldShowNotificationIcon; the path that opens a detail view did not.
+    // The check lives here rather than beside that one because the listener
+    // callback must still run: it is what invalidates the icon caches.
+    //
+    // Unconditional, and that is a real limitation: if every child of a bundle
+    // is independently filtered and the summary is not, the summary was the
+    // only announcement and there is now none.
     if (notification.isGroupSummary) {
       this.requestShellRender();
       return;
