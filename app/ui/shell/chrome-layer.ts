@@ -367,7 +367,11 @@ export class ShellChromeLayer implements Layer {
         noteStaleDataUsed();
       }
       const iconY = barTop + (((TOP_BAR_HEIGHT - NOTIFICATION_ICON_SIZE) / 2) | 0);
-      for (let index = 0; index < icons.length; index++) {
+      // Never draw more than the measured room: the cache is not keyed by
+      // maxIcons, so one filled while the bar was wider (a shorter clock, a
+      // narrower battery cluster) would otherwise spill past the tray.
+      const drawn = Math.min(icons.length, maxIcons);
+      for (let index = 0; index < drawn; index++) {
         image.drawImage(icons[index]!, iconsX + index * (NOTIFICATION_ICON_SIZE + 4), iconY);
       }
     }

@@ -20,6 +20,11 @@ import { noteStaleDataUsed, renderPassAllowsStaleData } from "../util/render-fre
 import { type InputEvent } from "./gestures";
 import { type Layer, type LayerContext, type PaintBelow } from "./layers";
 import { Menu, type MenuBox } from "./menu-core";
+import {
+  detailNotificationContent,
+  notificationTitle,
+  primaryNotificationBody,
+} from "./notification-text";
 
 const PAGE_X = 12;
 const PAGE_Y = 12;
@@ -421,17 +426,22 @@ function drawDetailContent(
   }
   image.drawText(font, appLineX, 42, `${notification.appName || notification.packageName}  ${formatRelativeTime(notification.postTime)}`, 150);
 
+  // Every block below has already had anything that would repeat the headline
+  // removed, and the headline itself is empty when the notification carries no
+  // text at all -- the sender is on the line above, so naming it again here
+  // would just print the same word twice.
   const lines: string[] = [];
-  lines.push(...wrapText(font, notification.title || "(untitled)", contentWidth));
-  const body = detailNotificationBody(notification);
-  if (body) {
-    lines.push("");
-    lines.push(...wrapText(font, body, contentWidth));
+  const content = detailNotificationContent(notification);
+  if (content.title) {
+    lines.push(...wrapText(font, content.title, contentWidth));
   }
-  const meta = [notification.subText, notification.infoText, notification.summaryText].filter(Boolean).join("  ");
-  if (meta) {
-    lines.push("");
-    lines.push(...wrapText(font, meta, contentWidth));
+  if (content.body) {
+    if (lines.length) lines.push("");
+    lines.push(...wrapText(font, content.body, contentWidth));
+  }
+  if (content.meta) {
+    if (lines.length) lines.push("");
+    lines.push(...wrapText(font, content.meta, contentWidth));
   }
 
   const step = lineStep(font);
@@ -476,17 +486,3 @@ function buildDetailMenu(notification: AndroidNotification, origin: SingleNotifi
   ];
 }
 
-function primaryNotificationBody(notification: AndroidNotification): string {
-  const title = notificationTitle(notification);
-  const body = notification.bigText || notification.text || notification.lines.join(" / ") || notification.summaryText || "";
-  return body === title ? "" : body;
-}
-
-function detailNotificationBody(notification: AndroidNotification): string {
-  const lines = notification.lines.length ? notification.lines.join("\n") : "";
-  return [notification.bigText || notification.text, lines].filter(Boolean).join("\n");
-}
-
-function notificationTitle(notification: AndroidNotification): string {
-  return notification.title || notification.text || notification.summaryText || notification.appName || notification.packageName || "(untitled)";
-}

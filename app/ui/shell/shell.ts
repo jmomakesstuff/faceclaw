@@ -675,8 +675,20 @@ class Shell {
   }
 
   private closeNotificationModal(modal: ShellModalLayer, wokeScreen: boolean): void {
-    this.stack.popIfTop((layer) => layer === modal);
-    if (wokeScreen) {
+    const closed = this.stack.popIfTop((layer) => layer === modal);
+    // Sleep only if THIS modal was the one on screen. A notification arriving
+    // while one is already up pushes its own modal on top, so this close can
+    // fire for a detail view the wearer stopped looking at a second ago --
+    // popIfTop then matches nothing and returns false. Sleeping on that path
+    // blanks the display out from under the modal that replaced it, and the
+    // next render wakes it straight back up: a visible off-then-on blink
+    // mid-notification.
+    //
+    // It needs the screen to have been OFF when the first notification arrived,
+    // since that is what sets wokeScreen; then a second notification on top;
+    // then the first leaving the tray. Two apps posting for one message (an SMS
+    // also bridged to a chat app, say) supply the middle condition readily.
+    if (wokeScreen && closed) {
       this.sleep();
     }
     this.config.requestShellRender();

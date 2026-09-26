@@ -35,6 +35,9 @@ function bell(): GrayImage {
   image.fillRect(10,20,4,2,220)
   return image
 }
+/** No tray-icon source on iOS; the warm is a no-op for interface parity. */
+export function warmActiveNotificationIcons(): void {}
+
 export function readActiveNotificationIcons(maxIcons: number, _allowStale: boolean) {
   const sources = new Set(readActiveNotifications(ALL_NOTIFICATIONS).map(n => n.packageName))
   return {icons: Array.from(sources).slice(0,Math.max(0,maxIcons)).map(() => bell()),stale:false}

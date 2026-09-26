@@ -570,6 +570,15 @@ class FaceclawMediaNotificationListenerService : NotificationListenerService() {
                 }
             }
             out.put("actions", actionsJson)
+            // Whether this is the container Android posts to stand in for a bundle,
+            // rather than a notification with content of its own. The wearer-facing
+            // side needs to tell the two apart; see handleAndroidNotificationPosted.
+            out.put("isGroupSummary", (notification.flags and Notification.FLAG_GROUP_SUMMARY) != 0)
+            // The notification Android REQUIRES an app to post while it runs a
+            // foreground service ("<App> is doing work in the background"). It is
+            // addressed to the system, not the wearer, and carries no content worth
+            // interrupting for.
+            out.put("isForegroundService", (notification.flags and Notification.FLAG_FOREGROUND_SERVICE) != 0)
             return out
         }
 
