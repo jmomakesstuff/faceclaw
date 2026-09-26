@@ -1,6 +1,6 @@
 /** Local input API v1. Transport: one UTF-8 JSON line per TCP connection. */
 export const REMOTE_PORT = 8791;
-export const PERMISSIONS = ['input', 'text', 'assistant'] as const;
+export const PERMISSIONS = ['input', 'text', 'assistant', 'record'] as const;
 export type Permission = typeof PERMISSIONS[number];
 export const GESTURES = ['click', 'double-click', 'long-press', 'short-then-long-press',
   'scroll-up', 'scroll-down', 'swipe-up', 'swipe-down', 'swipe-left', 'swipe-right'] as const;
@@ -14,8 +14,14 @@ export type RemoteHost = {
   text(text: string, submit: boolean): void;
   assistantAvailable(): boolean;
   assistant(text: string): void;
+  recordingAvailable(): boolean;
+  /**
+   * Start or stop the animated-GIF screen recording. Returns '' on start, and on
+   * stop the saved file's path on the device ('' when nothing was recording).
+   */
+  record(start: boolean): string;
 };
-export type Reply = { ok: true } | { ok: false; error: string; message: string };
+export type Reply = { ok: true; path?: string } | { ok: false; error: string; message: string };
 const error = (code: string, message: string): Reply => ({ ok: false, error: code, message });
 
 export class TokenStore {
@@ -66,28 +72,36 @@ export async function handleRequest(body: string, tokens: TokenStore, host: Remo
   if (!request || typeof request !== 'object' || Array.isArray(request)) return error('bad_request', 'Expected a JSON object.');
   const token = tokens.authenticate(request.token);
   if (!token) return error('unauthorized', 'Invalid or revoked token.');
-  if (request.version !== 1 || (request.action !== 'ping' && !PERMISSIONS.includes(request.action))) return error('bad_request', 'Expected version 1 and action ping, input, text or assistant.');
+  if (request.version !== 1 || (request.action !== 'ping' && !PERMISSIONS.includes(request.action))) return error('bad_request', 'Expected version 1 and action ping, input, text, assistant or record.');
   if (request.action === 'ping') {
     if (request.permission !== undefined && !PERMISSIONS.includes(request.permission)) return error('bad_request', 'Invalid permission.');
     if (request.permission && !token.permissions.includes(request.permission)) return error('forbidden', `Token lacks ${request.permission} permission.`);
     return { ok: true };
   }
   if (request.action === 'text' && request.submit !== undefined && typeof request.submit !== 'boolean') return error('bad_request', 'submit must be a boolean.');
+  if (request.action === 'record' && typeof request.start !== 'boolean') return error('bad_request', 'start must be a boolean.');
   if (!token.permissions.includes(request.action)) return error('forbidden', `Token lacks ${request.action} permission.`);
   if (request.action === 'input') {
     if (!GESTURES.includes(request.gesture) || !['watch', 'ring'].includes(request.source ?? 'watch') ||
       (request.source === 'ring' && request.gesture.startsWith('swipe-'))) {
       return error('bad_request', 'Invalid gesture or source; directions require watch input.');
     }
-  } else if (typeof request.text !== 'string' || !request.text.trim() || request.text.length > 8000 || request.text.includes('\0')) {
+  } else if ((request.action === 'text' || request.action === 'assistant') &&
+    (typeof request.text !== 'string' || !request.text.trim() || request.text.length > 8000 || request.text.includes('\0'))) {
     return error('bad_request', 'Text must contain 1–8000 characters without NUL.');
   }
   if (!host.ready()) return error('unavailable', 'Faceclaw is not ready for input.');
-  // Gestures follow the normal lock-screen path. Text must never bypass it.
+  // Gestures follow the normal lock-screen path; every other action is refused while locked.
   if (request.action !== 'input' && host.locked()) return error('locked', 'The glasses are locked.');
   try {
     if (request.action === 'input') await host.input(request.gesture, request.source ?? 'watch');
-    else if (request.action === 'text') {
+    else if (request.action === 'record') {
+      if (!host.recordingAvailable()) return error('unavailable', 'Screen recording is not available on this device.');
+      const path = host.record(request.start);
+      // Stopping when nothing is recording is not a failure: the caller wanted
+      // recording off, and it is off.
+      return request.start ? { ok: true } : { ok: true, path };
+    } else if (request.action === 'text') {
       if (!host.acceptsText()) return error('unavailable', 'The foreground window does not accept text.');
       host.text(request.text, request.submit !== false);
     } else {

@@ -428,6 +428,14 @@ class DashboardController {
       text: (text, submit) => { if (!shell.isScreenOn()) shell.wake("window"); shell.sendTextToForegroundWindow(text, { submit }); this.requestShellRender(); },
       assistantAvailable: () => shell.isAssistantAvailable(),
       assistant: text => shell.sendToAssistant(text),
+      // The same recording as the phone's Record button, so either side can
+      // stop one the other started.
+      recordingAvailable: () => this.display !== null,
+      record: start => {
+        if (!start) return this.stopScreenRecording();
+        this.startScreenRecording();
+        return "";
+      },
     });
     this.wearRemote = new WearRemote({
       apps: LAUNCHABLE_APPS,

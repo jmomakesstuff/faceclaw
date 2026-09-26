@@ -212,6 +212,9 @@ export class IosPreviewController {
       text: (text, submit) => { if (!shell.isScreenOn()) shell.wake('window'); shell.sendTextToForegroundWindow(text, { submit }); this.requestShellRender() },
       assistantAvailable: () => shell.isAssistantAvailable(),
       assistant: text => shell.sendToAssistant(text),
+      // The iOS display targets have no screen recorder yet.
+      recordingAvailable: () => false,
+      record: () => '',
     })
     registerSystemTools()
     registerWindowTools({ apps: ALL_APPS.filter(app => !iosAppUnavailableReason(app.appId)),

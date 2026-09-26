@@ -380,3 +380,8 @@ test('external input shares iOS dispatch, including hold release and phone-lock 
   await f.remoteHost.input('click', 'watch');
   assert.equal(f.received.length, 3);
 });
+
+test('external recording reports itself unavailable on iOS', async () => {
+  const f = fixture(); await f.connect();
+  assert.equal(f.remoteHost.recordingAvailable(), false);
+});

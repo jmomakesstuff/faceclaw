@@ -12,12 +12,15 @@ Permissions are independent:
   taps and the system menu. It has the same reach as those input devices.
 - **Text to foreground window** delivers text to the selected app's text input.
 - **Text to voice assistant** submits a query to the configured assistant.
+- **Record the screen** starts and stops an animated-GIF recording of the
+  glasses screen, saved on the phone. It captures whatever the wearer sees,
+  notifications included, so grant it only to callers that should see that.
 
-Text delivery is rejected while the glasses are locked. Gestures pass through
-the existing lock-screen and sleep behavior. The assistant must be configured;
-the selected window must accept text. Android requires connected glasses; iOS
-also allows the active phone preview. An assistant acknowledgment means the
-query was submitted, not that the assistant has finished answering.
+While the glasses are locked, only gestures and `ping` are accepted. Gestures
+pass through the existing lock-screen and sleep behavior. The assistant must be
+configured; the selected window must accept text. Android requires connected
+glasses; iOS also allows the active phone preview. An assistant acknowledgment
+means the query was submitted, not that the assistant has finished answering.
 
 ## Connect
 
@@ -77,6 +80,8 @@ node scripts/faceclaw-input.cjs input scroll-down --source ring
 node scripts/faceclaw-input.cjs text 'Text for the foreground app'
 node scripts/faceclaw-input.cjs text -n 'Type without pressing Enter'
 node scripts/faceclaw-input.cjs assistant 'What is on my calendar?'
+node scripts/faceclaw-input.cjs record start
+node scripts/faceclaw-input.cjs record stop
 node scripts/faceclaw-input.cjs interactive
 ```
 
@@ -87,6 +92,11 @@ starting with `--` can follow an option terminator, e.g. `text -- '--help'`.
 For terminal windows, text normally appends Enter; `text -n` suppresses that
 submission, like `echo -n`. Embedded newlines in the message are preserved.
 Other apps receive the text unchanged. Assistant messages do not accept `-n`.
+`record start` begins an animated-GIF recording of the glasses screen, and
+`record stop` saves it and prints its path on the phone, for `adb pull`. It is
+the same recording as the phone's Record button, so either can stop one the
+other started. Stopping when nothing is recording succeeds and prints
+`Nothing was recording.` Screen recording is available on Android only.
 One-off commands return a nonzero exit code on rejection or connection failure.
 The CLI never automatically replays an input or message after a failure,
 since delivery may already have occurred.
@@ -140,6 +150,7 @@ Authentication and current permissions are checked for every request.
 {"version":1,"token":"fc1_…","action":"text","text":"hello","submit":false}
 {"version":1,"token":"fc1_…","action":"ping","permission":"input"}
 {"version":1,"token":"fc1_…","action":"assistant","text":"Hello"}
+{"version":1,"token":"fc1_…","action":"record","start":true}
 ```
 
 Input gestures: `click`, `double-click`, `long-press`, `short-then-long-press`,
@@ -150,7 +161,10 @@ The CLI also accepts `tap`, `double-tap`, `up`, `down`, `left`, `right` aliases.
 `submit` is an optional boolean for `text`, defaulting to `true`; `false`
 suppresses the terminal app's appended Enter. `ping` validates the token and,
 if supplied, the requested `permission`, without dispatching any input or
-requiring connected glasses.
+requiring connected glasses. `start` is required for `record`: `true` begins a
+recording and `false` ends it. The reply to a stop carries `path`, the saved
+GIF's location on the phone, which is empty when nothing was recording. iOS
+answers `record` with `unavailable`.
 
 Successful reply: `{"ok":true}`. Rejections contain `ok:false`, `error`, and
 `message`. Error codes: `bad_request`, `unauthorized`, `forbidden`, `locked`,
