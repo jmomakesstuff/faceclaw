@@ -168,8 +168,8 @@ nothing has been drawn yet. It is usually a few KiB, but can approach 200 KiB
 for a screen that does not compress. Rejections contain `ok:false`, `error`, and
 `message`. Error codes: `bad_request`, `unauthorized`, `forbidden`, `locked`,
 `unavailable`, `failed`, `timeout`. Malformed framing closes the connection.
-Frames are limited to 64 KiB; text to 8000 JavaScript UTF-16 code units and must
-contain non-whitespace text without NUL. Whitespace in valid text is preserved.
+Request frames are limited to 64 KiB; text to 8000 JavaScript UTF-16 code units and
+must contain non-whitespace text without NUL. Whitespace in valid text is preserved.
 Connections have a five-second read deadline and five-second dispatch deadline.
 Each listening address serves one connection at a time with a bounded socket backlog.
 Token values and request text are never written to the server log.
