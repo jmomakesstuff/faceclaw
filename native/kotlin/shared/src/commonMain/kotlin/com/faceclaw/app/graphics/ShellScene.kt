@@ -23,8 +23,10 @@ class ShellScene(val layers: List<Layer>, val selections: List<RetainedDrawing> 
         }
         return calls
     }
-    fun preview(screenGray: ByteArray, width: Int, height: Int, rightLens: Boolean = false): ByteArray {
-        val screen = BmpUtil.pack4bppFromGray8(screenGray, width, height)
+    fun preview(screenGray: ByteArray, width: Int, height: Int, rightLens: Boolean = false): ByteArray =
+        previewPacked(BmpUtil.pack4bppFromGray8(screenGray, width, height), width, height, rightLens)
+    /** [preview] of a screen already packed to 4bpp, such as the frame the image pipeline sends. It is only read. */
+    fun previewPacked(screen: ByteArray, width: Int, height: Int, rightLens: Boolean = false): ByteArray {
         val output = ByteArray(screen.size); val resources = HashMap<Int, ByteArray>()
         val surfaces = IntArray(layers.size) { id ->
             val layer = layers[id]; resources[id] = DrawProtocol.rawImage(layer.width, layer.height, layer.packed); id

@@ -5,14 +5,16 @@ const net = require('node:net');
 const { EventEmitter } = require('node:events');
 const { TokenStore, handleRequest, GESTURES } = require('../.test-build/app/remote/protocol.js');
 const cli = require('../scripts/faceclaw-input.cjs');
-function fixture(permissions = ['input', 'text', 'assistant']) {
+function fixture(permissions = ['input', 'text', 'assistant', 'record']) {
   let stored = '[]'; const calls = [];
   const tokens = new TokenStore(() => stored, value => { stored = value; },
     () => crypto.randomBytes(32).toString('hex'), value => crypto.createHash('sha256').update(value).digest('hex'));
   const { token, record } = tokens.create('Test app', permissions);
   const host = { ready: () => true, locked: () => false, input: async (...args) => calls.push(args),
     acceptsText: () => true, text: text => calls.push(['text', text]), assistantAvailable: () => true,
-    assistant: text => calls.push(['assistant', text]) };
+    assistant: text => calls.push(['assistant', text]), recordingAvailable: () => true,
+    record: start => { calls.push(['record', start]); return start ? '' : host.recordingPath; },
+    recordingPath: '/storage/emulated/0/Android/data/com.faceclaw.app/files/screenshots/recording-20260924-120000-000.gif' };
   const request = payload => handleRequest(JSON.stringify({ version: 1, token, ...payload }), tokens, host);
   return { tokens, token, record, host, calls, request, stored: () => stored };
 }
@@ -29,15 +31,15 @@ test('tokens are random, persisted only as hashes, and survive reload', () => {
   assert.throws(() => f.tokens.create('Empty', []));
 });
 test('permission matrix independently authorizes each operation; edits and revocation take effect immediately', async () => {
-  for (const permission of ['input', 'text', 'assistant']) {
+  for (const permission of ['input', 'text', 'assistant', 'record']) {
     const f = fixture([permission]);
-    for (const action of ['input', 'text', 'assistant']) {
-      const result = await f.request({ action, gesture: 'click', text: 'hello' });
+    for (const action of ['input', 'text', 'assistant', 'record']) {
+      const result = await f.request({ action, gesture: 'click', text: 'hello', start: true });
       assert.equal(result.ok, action === permission);
       if (!result.ok) assert.equal(result.error, 'forbidden');
     }
     f.tokens.permissions(f.record.id, []);
-    assert.equal((await f.request({ action: permission, gesture: 'click', text: 'hello' })).error, 'forbidden');
+    assert.equal((await f.request({ action: permission, gesture: 'click', text: 'hello', start: true })).error, 'forbidden');
     f.tokens.revoke(f.record.id);
     assert.equal((await f.request({ action: permission })).error, 'unauthorized');
   }
@@ -59,9 +61,9 @@ test('malformed and unauthorized requests have no side effects', async () => {
     { action: 'assistant', text: '\0' } ]) assert.equal((await f.request(payload)).ok, false);
   assert.deepEqual(f.calls, []);
 });
-test('locks block text and assistant; gestures still use lock-screen dispatch', async () => {
+test('locks block text, assistant and record; gestures still use lock-screen dispatch', async () => {
   const f = fixture(); f.host.locked = () => true;
-  for (const action of ['text', 'assistant']) assert.equal((await f.request({ action, text: 'hello' })).error, 'locked');
+  for (const action of ['text', 'assistant', 'record']) assert.equal((await f.request({ action, text: 'hello', start: true })).error, 'locked');
   assert.equal((await f.request({ action: 'input', gesture: 'double-click' })).ok, true);
   assert.deepEqual(f.calls, [['double-click', 'watch']]);
 });
@@ -231,4 +233,60 @@ test('client keeps the sending side open until the reply, including across a for
   const options = { host: '127.0.0.1', port: server.address().port, token: fixture().token };
   for (let i = 0; i < 4; i++) await cli.send(options, { action: 'input', gesture: 'click' });
   assert.equal(prematureEnd, false);
+});
+
+test('record starts and stops the recording, and stop reports where it was saved', async () => {
+  const f = fixture();
+  assert.deepEqual(await f.request({ action: 'record', start: true }), { ok: true });
+  assert.deepEqual(await f.request({ action: 'record', start: false }), { ok: true, path: f.host.recordingPath });
+  assert.deepEqual(f.calls, [['record', true], ['record', false]]);
+});
+
+test('stopping when nothing is recording succeeds with an empty path', async () => {
+  // The caller wanted recording off, and it is off; an error here would make a
+  // repeated stop look like a broken one.
+  const f = fixture(); f.host.recordingPath = '';
+  assert.deepEqual(await f.request({ action: 'record', start: false }), { ok: true, path: '' });
+});
+
+test('record needs a boolean start, takes no text, and is unavailable where recording is', async () => {
+  const f = fixture();
+  for (const start of [undefined, 'true', 1]) assert.equal((await f.request({ action: 'record', start })).error, 'bad_request');
+  assert.deepEqual(f.calls, []);
+  f.host.recordingAvailable = () => false;
+  assert.equal((await f.request({ action: 'record', start: true })).error, 'unavailable');
+  assert.deepEqual(f.calls, []);
+});
+
+test('CLI record takes exactly one of start or stop', () => {
+  const env = { FACECLAW_TOKEN: fixture().token };
+  assert.deepEqual(cli.parseArgs(['record', 'start'], env).payload, { action: 'record', start: true });
+  assert.deepEqual(cli.parseArgs(['record', 'stop'], env).payload, { action: 'record', start: false });
+  for (const args of [['record'], ['record', 'begin'], ['record', 'start', 'stop']]) {
+    assert.throws(() => cli.parseArgs(args, env), /exactly one of start or stop/);
+  }
+});
+
+test('CLI record reports the saved path on stop', async t => {
+  const { execFile } = require('node:child_process');
+  const path = require('node:path');
+  const f = fixture(['record']);
+  const server = net.createServer(socket => {
+    let text = '';
+    socket.setEncoding('utf8');
+    socket.on('data', async chunk => {
+      text += chunk;
+      if (text.endsWith('\n')) socket.end(JSON.stringify(await handleRequest(text.trimEnd(), f.tokens, f.host)) + '\n');
+    });
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const run = (...args) => new Promise((resolve, reject) => execFile(process.execPath,
+    [path.join(__dirname, '..', 'scripts', 'faceclaw-input.cjs'), ...args],
+    { env: { ...process.env, FACECLAW_TOKEN: f.token, FACECLAW_HOST: '127.0.0.1', FACECLAW_PORT: String(server.address().port) } },
+    (error, stdout, stderr) => error ? reject(new Error(stderr)) : resolve(stdout)));
+  assert.equal(await run('record', 'start'), 'Recording.\n');
+  assert.equal(await run('record', 'stop'), `${f.host.recordingPath}\n`);
+  f.host.recordingPath = '';
+  assert.equal(await run('record', 'stop'), 'Nothing was recording.\n');
 });

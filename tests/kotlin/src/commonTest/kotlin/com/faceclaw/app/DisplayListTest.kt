@@ -209,6 +209,22 @@ class DisplayListTest {
             }
         }
     }
+    @Test fun previewOfTheSentFrameIsWhatTheGlassesDraw() {
+        val random = Random(7)
+        val app = random.nextBytes(640 * 480 / 2)
+        val sent = app.copyOf()
+        fun row(x: Int) = MenuSelection(x, 8, 8, 4, 1, 4, 9, 2, hex("00ff0000000000000000000000000000"))
+        val scene = ShellScene(listOf(ShellScene.Layer(1, 20, 30, 3, 3, 128, hex("fff0fff0fff0"))), listOf(row(10)))
+        val plan = ScenePlanner(ResourceCacheState()).plan(app, 640, 480, null, scene, 1)
+        for (right in listOf(false, true)) {
+            val glasses = Glasses(right); glasses.apply(plan.commands)
+            val preview = scene.previewPacked(app, 640, 480, right)
+            assertContentEquals(glasses.composition, BmpUtil.pack4bppFromGray8(preview, 640, 480))
+        }
+        assertContentEquals(sent, app) // the pipeline's frame is only read
+        assertContentEquals(scene.preview(ByteArray(640 * 480) { 96 }, 640, 480),
+            scene.previewPacked(ByteArray(640 * 480 / 2) { 0x66 }, 640, 480))
+    }
     @Test fun persistentShellUpdatesDoNotPolluteScreenAndClosingRevealsCurrentApp() {
         val cache=ResourceCacheState();val planner=ScenePlanner(cache);val glasses=Glasses()
         val app=ByteArray(640*480/2){0x99.toByte()}

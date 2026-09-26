@@ -114,6 +114,17 @@ class GlassesSessionCore(
      * fall through to the normal frame parser exactly as before. Called on the BLE thread.
      */
     @Volatile internal var rawFrameTap: ((ByteArray) -> Unit)? = null
+
+    /**
+     * Optional tap on the image pipeline, for recording the screen exactly: called each time a
+     * frame is committed for transmission, with the packed 4bpp screen (see
+     * BmpUtil.pack4bppFromGray8), its size, and the shell scene the glasses draw over it (empty
+     * when the firmware does not draw scenes). A composite identical to the last committed frame
+     * is not committed, so it is not tapped; a resync that repaints the screen commits, and taps,
+     * the current frame again. The frame must not be modified. Called on the sender thread with
+     * the session lock held, so any real work belongs on another thread.
+     */
+    @Volatile internal var sentFrameTap: ((ByteArray, Int, Int, ShellScene) -> Unit)? = null
     internal val imuListeners = CopyOnWriteList<FaceclawImuListener>(platform)
     /** A compass subscriber plus the dispatcher it registered from (see addCompassListener). */
     internal class CompassSubscription(
@@ -329,6 +340,11 @@ class GlassesSessionCore(
     /** See [rawFrameTap]; null restores the default (frames parsed by the session). */
     fun setRawFrameTap(tap: ((ByteArray) -> Unit)?) {
         rawFrameTap = tap
+    }
+
+    /** See [sentFrameTap]; null stops tapping. */
+    fun setSentFrameTap(tap: ((ByteArray, Int, Int, ShellScene) -> Unit)?) {
+        sentFrameTap = tap
     }
 
     /**

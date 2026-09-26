@@ -157,7 +157,10 @@ const FRAME_TRANSMIT_BACKPRESSURE_TIMEOUT_MS = 6_000;
 // trailing update, so the mirror tracks the glasses within this bound instead
 // of the old 1s poll (which lagged up to two polls behind).
 const CONNECTED_PREVIEW_MIN_UPDATE_MS = 150;
-// The GIF recorder keeps its old cadence; per-frame captures would balloon it.
+// Preview-flush captures for the GIF recorder keep their old cadence. While
+// connected, the communicator already records every frame sent to the glasses,
+// so these only add samples of on-glasses animation between sends; in
+// preview-only mode they are the whole recording.
 const RECORDING_MIN_CAPTURE_MS = 1_000;
 // Below this, a disconnect is more likely a flat battery than a BLE problem.
 const LOW_BATTERY_PERCENT = 5;
@@ -428,6 +431,14 @@ class DashboardController {
       text: (text, submit) => { if (!shell.isScreenOn()) shell.wake("window"); shell.sendTextToForegroundWindow(text, { submit }); this.requestShellRender(); },
       assistantAvailable: () => shell.isAssistantAvailable(),
       assistant: text => shell.sendToAssistant(text),
+      // The same recording as the phone's Record button, so either side can
+      // stop one the other started.
+      recordingAvailable: () => this.display !== null,
+      record: start => {
+        if (!start) return this.stopScreenRecording();
+        this.startScreenRecording();
+        return "";
+      },
     });
     this.wearRemote = new WearRemote({
       apps: LAUNCHABLE_APPS,
@@ -932,9 +943,10 @@ class DashboardController {
   }
 
   /**
-   * Begin collecting composited frames for an animated-GIF screen recording.
-   * Frames are captured at the same points the phone-side preview is
-   * refreshed, so the recording matches what the phone display showed.
+   * Begin an animated-GIF screen recording. While connected, the communicator
+   * records every frame as it is sent to the glasses; the phone-side preview
+   * refreshes add a sample about once a second, which is all a preview-only
+   * recording gets.
    */
   startScreenRecording(): void {
     if (this.screenRecordingActive) return;

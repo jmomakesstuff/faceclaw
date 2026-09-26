@@ -12,6 +12,7 @@ const HELP = `Usage: faceclaw-input [--host HOST] [--port PORT] [--token-file FI
   input GESTURE [--source watch|ring]   Send one gesture (default source: watch)
   text [-n] MESSAGE                   Type into the foreground window (-n: no Enter)
   assistant MESSAGE                   Send a message to the voice assistant
+  record start|stop                   Record the glasses screen to an animated GIF
   interactive                         Use this terminal as a watch input device
 
 Gestures: tap, double-tap, long-press, short-then-long-press,
@@ -60,7 +61,10 @@ function parseArgs(args, env = process.env) {
     const text = values.join(' ');
     if (!text.trim() || text.length > 8000 || text.includes('\0')) throw new Error('Message must contain 1–8000 characters without NUL.');
     payload = { action: command, text, ...(noSubmit ? { submit: false } : {}) };
-  } else throw new Error('Expected input, text, assistant or interactive. See --help.');
+  } else if (command === 'record') {
+    if (values.length !== 1 || !['start', 'stop'].includes(values[0])) throw new Error('record takes exactly one of start or stop.');
+    payload = { action: 'record', start: values[0] === 'start' };
+  } else throw new Error('Expected input, text, assistant, record or interactive. See --help.');
   return { options, payload };
 }
 function send(options, payload, signal) {
@@ -197,7 +201,11 @@ async function main() {
     const args = parseArgs(process.argv.slice(2));
     if (args.help) return process.stdout.write(HELP);
     if (args.interactive) await interactive(args.options);
-    else { await send(args.options, args.payload); process.stdout.write('Sent.\n'); }
+    else if (args.payload.action === 'record') {
+      const reply = await send(args.options, args.payload);
+      // Stop prints where the GIF was saved on the device.
+      process.stdout.write(args.payload.start ? 'Recording.\n' : `${reply.path || 'Nothing was recording.'}\n`);
+    } else { await send(args.options, args.payload); process.stdout.write('Sent.\n'); }
   } catch (error) { process.stderr.write(`${error.message}\n`); process.exitCode = 1; }
 }
 module.exports = { parseArgs, send, keyGesture, interactive };
