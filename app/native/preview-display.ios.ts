@@ -21,6 +21,7 @@ export type DisplayTarget = Pick<
   | "submitShellScene"
   | "waitForFrameFinished"
   | "getCompositePreview"
+  | "compositePngBase64"
   | "saveScreenshot"
   | "startScreenRecording"
   | "recordScreenFrame"
@@ -126,6 +127,12 @@ export class PreviewDisplayTarget implements DisplayTarget {
 
   getCompositePreview(green = false): ImageSource | null {
     return previewPixels(this.compositor.composite(), this.compositor.width, this.compositor.height, green);
+  }
+
+  /** The current composite as a base64 4-bit grayscale PNG; empty when nothing is composited. */
+  compositePngBase64(): string {
+    const png = FaceclawKitIosProtocol.new().pngDataWidthHeight(toData(this.compositor.composite()), this.compositor.width, this.compositor.height);
+    return png ? png.base64EncodedStringWithOptions(0 as NSDataBase64EncodingOptions) : "";
   }
 
   /** Save the current composite as a 4-bit grayscale PNG under Documents; cropping is not supported on iOS. */

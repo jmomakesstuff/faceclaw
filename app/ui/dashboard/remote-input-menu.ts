@@ -9,7 +9,7 @@ import { drawRightValueMenuItem, type MenuItem } from '../menu';
 import { type LayerContext } from '../layers';
 import { openSettingsSubMenu } from './settings-panel';
 
-const labels: Record<Permission, string> = { input: 'Provide input', text: 'Text to foreground window', assistant: 'Text to voice assistant' };
+const labels: Record<Permission, string> = { input: 'Provide input', text: 'Text to foreground window', assistant: 'Text to voice assistant', screenshot: 'Capture the screen' };
 const nameSetting = new ConfigSettingString({ id: 'remoteInputNewName', storageKey: 'remoteInput.newName',
   label: 'Token name', defaultValue: 'My app', normalize: value => (value ?? '').slice(0, 80) });
 

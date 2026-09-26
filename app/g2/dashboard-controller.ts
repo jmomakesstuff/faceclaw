@@ -428,6 +428,9 @@ class DashboardController {
       text: (text, submit) => { if (!shell.isScreenOn()) shell.wake("window"); shell.sendTextToForegroundWindow(text, { submit }); this.requestShellRender(); },
       assistantAvailable: () => shell.isAssistantAvailable(),
       assistant: text => shell.sendToAssistant(text),
+      // Unlike saveScreenshot: the whole screen, uncropped so successive
+      // captures line up, and nothing is written to the phone's storage.
+      screenshot: () => this.display?.compositePngBase64() ?? "",
     });
     this.wearRemote = new WearRemote({
       apps: LAUNCHABLE_APPS,

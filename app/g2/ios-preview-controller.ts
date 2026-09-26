@@ -212,6 +212,7 @@ export class IosPreviewController {
       text: (text, submit) => { if (!shell.isScreenOn()) shell.wake('window'); shell.sendTextToForegroundWindow(text, { submit }); this.requestShellRender() },
       assistantAvailable: () => shell.isAssistantAvailable(),
       assistant: text => shell.sendToAssistant(text),
+      screenshot: () => this.display?.compositePngBase64() ?? '',
     })
     registerSystemTools()
     registerWindowTools({ apps: ALL_APPS.filter(app => !iosAppUnavailableReason(app.appId)),

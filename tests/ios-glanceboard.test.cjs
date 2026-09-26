@@ -74,6 +74,7 @@ function fixture() {
   }
   class PreviewDisplayTarget extends Display {
     activate(fn) { this.onFrame = fn; } release() { this.onFrame = null; }
+    compositePngBase64() { return 'preview-png'; }
     changed() { this.onFrame?.(); }
     waitForFrameFinished() { return Promise.resolve('composited'); }
   }
@@ -93,6 +94,7 @@ function fixture() {
     async start() { this.emitState('connected', 'Connected.'); }
     async disconnect() { this.emitState('disconnected', 'Disconnected.'); }
     waitForFrameFinished() { return Promise.resolve('sent'); }
+    compositePngBase64() { return 'glasses-png'; }
     changed() { if (this.phase === 'connected') sent.push(this.compositor.composite()); }
   }
   const provider = {
@@ -379,4 +381,11 @@ test('external input shares iOS dispatch, including hold release and phone-lock 
   assert.equal(f.remoteHost.locked(), true);
   await f.remoteHost.input('click', 'watch');
   assert.equal(f.received.length, 3);
+});
+
+test('external screenshot captures whichever display target is current', async () => {
+  const f = fixture();
+  assert.equal(f.remoteHost.screenshot(), 'preview-png');
+  await f.connect();
+  assert.equal(f.remoteHost.screenshot(), 'glasses-png');
 });

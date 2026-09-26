@@ -27,6 +27,7 @@ export type DisplayTarget = Pick<
   | "submitShellScene"
   | "waitForFrameFinished"
   | "getCompositePreview"
+  | "compositePngBase64"
   | "saveScreenshot"
   | "startScreenRecording"
   | "recordScreenFrame"
@@ -158,6 +159,11 @@ export class PreviewDisplayTarget implements DisplayTarget {
     if (!global.isAndroid) return null;
     const bitmap = this.compositor.getCompositePreviewBitmap(PREVIEW_BRIGHTEN_GAMMA, green);
     return bitmap ? new ImageSource(bitmap) : null;
+  }
+
+  compositePngBase64(): string {
+    if (!global.isAndroid) return "";
+    return String(this.compositor.compositePngBase64());
   }
 
   saveScreenshot(crop?: { x: number; y: number; width: number; height: number }): string {

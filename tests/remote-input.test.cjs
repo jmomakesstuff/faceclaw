@@ -5,14 +5,16 @@ const net = require('node:net');
 const { EventEmitter } = require('node:events');
 const { TokenStore, handleRequest, GESTURES } = require('../.test-build/app/remote/protocol.js');
 const cli = require('../scripts/faceclaw-input.cjs');
-function fixture(permissions = ['input', 'text', 'assistant']) {
+function fixture(permissions = ['input', 'text', 'assistant', 'screenshot']) {
   let stored = '[]'; const calls = [];
   const tokens = new TokenStore(() => stored, value => { stored = value; },
     () => crypto.randomBytes(32).toString('hex'), value => crypto.createHash('sha256').update(value).digest('hex'));
   const { token, record } = tokens.create('Test app', permissions);
   const host = { ready: () => true, locked: () => false, input: async (...args) => calls.push(args),
     acceptsText: () => true, text: text => calls.push(['text', text]), assistantAvailable: () => true,
-    assistant: text => calls.push(['assistant', text]) };
+    assistant: text => calls.push(['assistant', text]),
+    screenshot: () => { calls.push(['screenshot']); return host.pngBase64; },
+    pngBase64: Buffer.from('fake-png-bytes').toString('base64') };
   const request = payload => handleRequest(JSON.stringify({ version: 1, token, ...payload }), tokens, host);
   return { tokens, token, record, host, calls, request, stored: () => stored };
 }
@@ -29,9 +31,9 @@ test('tokens are random, persisted only as hashes, and survive reload', () => {
   assert.throws(() => f.tokens.create('Empty', []));
 });
 test('permission matrix independently authorizes each operation; edits and revocation take effect immediately', async () => {
-  for (const permission of ['input', 'text', 'assistant']) {
+  for (const permission of ['input', 'text', 'assistant', 'screenshot']) {
     const f = fixture([permission]);
-    for (const action of ['input', 'text', 'assistant']) {
+    for (const action of ['input', 'text', 'assistant', 'screenshot']) {
       const result = await f.request({ action, gesture: 'click', text: 'hello' });
       assert.equal(result.ok, action === permission);
       if (!result.ok) assert.equal(result.error, 'forbidden');
@@ -59,9 +61,9 @@ test('malformed and unauthorized requests have no side effects', async () => {
     { action: 'assistant', text: '\0' } ]) assert.equal((await f.request(payload)).ok, false);
   assert.deepEqual(f.calls, []);
 });
-test('locks block text and assistant; gestures still use lock-screen dispatch', async () => {
+test('locks block text, assistant and screenshot; gestures still use lock-screen dispatch', async () => {
   const f = fixture(); f.host.locked = () => true;
-  for (const action of ['text', 'assistant']) assert.equal((await f.request({ action, text: 'hello' })).error, 'locked');
+  for (const action of ['text', 'assistant', 'screenshot']) assert.equal((await f.request({ action, text: 'hello' })).error, 'locked');
   assert.equal((await f.request({ action: 'input', gesture: 'double-click' })).ok, true);
   assert.deepEqual(f.calls, [['double-click', 'watch']]);
 });
@@ -231,4 +233,71 @@ test('client keeps the sending side open until the reply, including across a for
   const options = { host: '127.0.0.1', port: server.address().port, token: fixture().token };
   for (let i = 0; i < 4; i++) await cli.send(options, { action: 'input', gesture: 'click' });
   assert.equal(prematureEnd, false);
+});
+
+test('screenshot returns the composited image in the reply and needs no text or gesture', async () => {
+  const f = fixture();
+  const reply = await f.request({ action: 'screenshot' });
+  assert.equal(reply.ok, true);
+  assert.equal(Buffer.from(reply.png, 'base64').toString(), 'fake-png-bytes');
+  assert.deepEqual(f.calls, [['screenshot']]);
+});
+
+test('screenshot reports unavailable rather than an empty image', async () => {
+  const f = fixture(); f.host.pngBase64 = '';
+  assert.equal((await f.request({ action: 'screenshot' })).error, 'unavailable');
+  f.host.screenshot = () => { throw new Error('private detail'); };
+  assert.equal((await f.request({ action: 'screenshot' })).error, 'failed');
+});
+
+test('CLI screenshot takes no arguments and --out is only valid with it', () => {
+  const env = { FACECLAW_TOKEN: fixture().token };
+  assert.deepEqual(cli.parseArgs(['screenshot'], env).payload, { action: 'screenshot' });
+  assert.equal(cli.parseArgs(['screenshot', '--out', 'screen.png'], env).options.out, 'screen.png');
+  // A stray argument is a typo rather than a file name.
+  assert.throws(() => cli.parseArgs(['screenshot', 'screen.png'], env), /--out FILE/);
+  assert.throws(() => cli.parseArgs(['input', 'tap', '--out', 'screen.png'], env), /only valid with screenshot/);
+});
+
+test('CLI accepts a screenshot reply larger than the limit for other replies', async t => {
+  // An incompressible 640x480 4-bit screen encodes to about 200 KiB of base64.
+  const png = crypto.randomBytes(154_200).toString('base64');
+  const server = net.createServer(socket => {
+    let text = '';
+    // The client resets the connection when it rejects a reply as oversized.
+    socket.on('error', () => {});
+    socket.on('data', chunk => { text += chunk; if (text.endsWith('\n')) socket.end(JSON.stringify({ ok: true, png }) + '\n'); });
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const options = { host: '127.0.0.1', port: server.address().port, token: fixture().token };
+  assert.equal((await cli.send(options, { action: 'screenshot' })).png, png);
+  await assert.rejects(cli.send(options, { action: 'input', gesture: 'click' }), /Oversized Faceclaw response/);
+});
+
+test('CLI screenshot saves the PNG to --out, or writes it to redirected stdout', async t => {
+  const { execFile } = require('node:child_process');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const f = fixture(['screenshot']);
+  const server = net.createServer(socket => {
+    let text = '';
+    socket.setEncoding('utf8');
+    socket.on('data', async chunk => {
+      text += chunk;
+      if (text.endsWith('\n')) socket.end(JSON.stringify(await handleRequest(text.trimEnd(), f.tokens, f.host)) + '\n');
+    });
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'faceclaw-input-'));
+  t.after(() => { fs.rmSync(dir, { recursive: true, force: true }); return new Promise(resolve => server.close(resolve)); });
+  const run = (...args) => new Promise((resolve, reject) => execFile(process.execPath,
+    [path.join(__dirname, '..', 'scripts', 'faceclaw-input.cjs'), ...args],
+    { encoding: 'buffer', env: { ...process.env, FACECLAW_TOKEN: f.token, FACECLAW_HOST: '127.0.0.1', FACECLAW_PORT: String(server.address().port) } },
+    (error, stdout, stderr) => error ? reject(new Error(stderr.toString())) : resolve(stdout)));
+  const out = path.join(dir, 'screen.png');
+  assert.match((await run('screenshot', '--out', out)).toString(), /^Saved 14 bytes to /);
+  assert.equal(fs.readFileSync(out, 'utf8'), 'fake-png-bytes');
+  assert.equal((await run('screenshot')).toString(), 'fake-png-bytes');
 });

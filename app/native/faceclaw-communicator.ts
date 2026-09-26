@@ -481,6 +481,12 @@ export class FaceclawCommunicatorBridge {
     return bitmap ? new ImageSource(bitmap) : null;
   }
 
+  /** The current composite as a base64 4-bit grayscale PNG; empty when nothing is composited. */
+  compositePngBase64(): string {
+    if (!global.isAndroid) return "";
+    return String(this.communicator.compositePngBase64());
+  }
+
   /** Save the current composite as a 4-bit grayscale PNG; returns the path (empty if none). */
   saveScreenshot(crop?: { x: number; y: number; width: number; height: number }): string {
     if (!global.isAndroid) return "";
