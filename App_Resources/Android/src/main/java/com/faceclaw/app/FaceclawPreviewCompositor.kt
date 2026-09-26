@@ -137,6 +137,15 @@ class FaceclawPreviewCompositor(context: Context) {
                 java.nio.ByteBuffer.wrap(composite.gray), composite.width, composite.height, brightenGamma, green)
     }
 
+    /** The current composite as a base64 4-bit grayscale PNG, or "" when nothing is composited. */
+    fun compositePngBase64(): String {
+        val composite = compositor.previewComposite()
+        if (composite == null) {
+            return ""
+        }
+        return ScreenshotUtil.encodePngBase64(composite.gray, composite.width, composite.height)
+    }
+
     /** Save the current composite as a 4-bit grayscale PNG; returns the path or "". */
     @Throws(java.io.IOException::class)
     fun saveCompositePngScreenshot(): String {

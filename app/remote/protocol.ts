@@ -1,6 +1,6 @@
 /** Local input API v1. Transport: one UTF-8 JSON line per TCP connection. */
 export const REMOTE_PORT = 8791;
-export const PERMISSIONS = ['input', 'text', 'assistant'] as const;
+export const PERMISSIONS = ['input', 'text', 'assistant', 'screenshot'] as const;
 export type Permission = typeof PERMISSIONS[number];
 export const GESTURES = ['click', 'double-click', 'long-press', 'short-then-long-press',
   'scroll-up', 'scroll-down', 'swipe-up', 'swipe-down', 'swipe-left', 'swipe-right'] as const;
@@ -14,8 +14,10 @@ export type RemoteHost = {
   text(text: string, submit: boolean): void;
   assistantAvailable(): boolean;
   assistant(text: string): void;
+  /** The composited glasses screen as a base64 4-bit grayscale PNG, or '' when nothing is composited. */
+  screenshot(): string;
 };
-export type Reply = { ok: true } | { ok: false; error: string; message: string };
+export type Reply = { ok: true; png?: string } | { ok: false; error: string; message: string };
 const error = (code: string, message: string): Reply => ({ ok: false, error: code, message });
 
 export class TokenStore {
@@ -66,7 +68,7 @@ export async function handleRequest(body: string, tokens: TokenStore, host: Remo
   if (!request || typeof request !== 'object' || Array.isArray(request)) return error('bad_request', 'Expected a JSON object.');
   const token = tokens.authenticate(request.token);
   if (!token) return error('unauthorized', 'Invalid or revoked token.');
-  if (request.version !== 1 || (request.action !== 'ping' && !PERMISSIONS.includes(request.action))) return error('bad_request', 'Expected version 1 and action ping, input, text or assistant.');
+  if (request.version !== 1 || (request.action !== 'ping' && !PERMISSIONS.includes(request.action))) return error('bad_request', 'Expected version 1 and action ping, input, text, assistant or screenshot.');
   if (request.action === 'ping') {
     if (request.permission !== undefined && !PERMISSIONS.includes(request.permission)) return error('bad_request', 'Invalid permission.');
     if (request.permission && !token.permissions.includes(request.permission)) return error('forbidden', `Token lacks ${request.permission} permission.`);
@@ -79,15 +81,22 @@ export async function handleRequest(body: string, tokens: TokenStore, host: Remo
       (request.source === 'ring' && request.gesture.startsWith('swipe-'))) {
       return error('bad_request', 'Invalid gesture or source; directions require watch input.');
     }
-  } else if (typeof request.text !== 'string' || !request.text.trim() || request.text.length > 8000 || request.text.includes('\0')) {
+  } else if ((request.action === 'text' || request.action === 'assistant') &&
+    (typeof request.text !== 'string' || !request.text.trim() || request.text.length > 8000 || request.text.includes('\0'))) {
     return error('bad_request', 'Text must contain 1–8000 characters without NUL.');
   }
   if (!host.ready()) return error('unavailable', 'Faceclaw is not ready for input.');
-  // Gestures follow the normal lock-screen path. Text must never bypass it.
+  // Gestures follow the normal lock-screen path; every other action is refused while locked.
   if (request.action !== 'input' && host.locked()) return error('locked', 'The glasses are locked.');
   try {
     if (request.action === 'input') await host.input(request.gesture, request.source ?? 'watch');
-    else if (request.action === 'text') {
+    else if (request.action === 'screenshot') {
+      // The image travels in the reply, so a caller on another machine needs no
+      // adb or file access to fetch it. '' means nothing has been composited yet.
+      const png = host.screenshot();
+      if (!png) return error('unavailable', 'The glasses screen has not been drawn yet.');
+      return { ok: true, png };
+    } else if (request.action === 'text') {
       if (!host.acceptsText()) return error('unavailable', 'The foreground window does not accept text.');
       host.text(request.text, request.submit !== false);
     } else {

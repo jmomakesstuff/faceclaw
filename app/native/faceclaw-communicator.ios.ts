@@ -482,6 +482,12 @@ export class FaceclawCommunicatorBridge {
     return previewPixels(fromData(frame.pixels), width, height, green);
   }
 
+  /** The current composite as a base64 4-bit grayscale PNG; empty when nothing is composited. */
+  compositePngBase64(): string {
+    const png = this.communicator.screenshotPng();
+    return png ? png.base64EncodedStringWithOptions(0 as NSDataBase64EncodingOptions) : "";
+  }
+
   /** Save the current composite as a 4-bit grayscale PNG under Documents; returns the path (empty if none). Cropping is not supported on iOS. */
   saveScreenshot(crop?: { x: number; y: number; width: number; height: number }): string {
     if (crop) return "";

@@ -7,11 +7,15 @@ const fs = require('node:fs');
 const GESTURES = new Set(['click', 'double-click', 'long-press', 'short-then-long-press', 'scroll-up', 'scroll-down',
   'swipe-up', 'swipe-down', 'swipe-left', 'swipe-right']);
 const ALIASES = { tap: 'click', 'double-tap': 'double-click', up: 'swipe-up', down: 'swipe-down', left: 'swipe-left', right: 'swipe-right' };
+// A screenshot reply carries the whole 640x480 4-bit screen as a base64 PNG: a
+// few KiB for a typical screen, and about 200 KiB for one that does not compress.
+const MAX_RESPONSE_BYTES = { screenshot: 256 * 1024 };
 const HELP = `Usage: faceclaw-input [--host HOST] [--port PORT] [--token-file FILE] COMMAND
 
   input GESTURE [--source watch|ring]   Send one gesture (default source: watch)
   text [-n] MESSAGE                   Type into the foreground window (-n: no Enter)
   assistant MESSAGE                   Send a message to the voice assistant
+  screenshot [--out FILE]             Save the glasses screen as a PNG (default: stdout)
   interactive                         Use this terminal as a watch input device
 
 Gestures: tap, double-tap, long-press, short-then-long-press,
@@ -32,7 +36,7 @@ function parseArgs(args, env = process.env) {
     if (arg === '--') { positional.push(...args.slice(i + 1)); break; }
     if (arg === '-n') { noSubmit = true; continue; }
     if (arg === '--help' || arg === '-h') return { help: true };
-    if (['--host', '--port', '--token-file', '--source'].includes(arg)) {
+    if (['--host', '--port', '--token-file', '--source', '--out'].includes(arg)) {
       const value = args[++i];
       if (!value || value.startsWith('--')) throw new Error(`Missing value for ${arg}.`);
       if (arg === '--port') options.port = Number(value);
@@ -46,6 +50,7 @@ function parseArgs(args, env = process.env) {
   if (!['watch', 'ring'].includes(options.source)) throw new Error('Source must be watch or ring.');
   const [command, ...values] = positional;
   if (noSubmit && command !== 'text') throw new Error('-n is only valid with text.');
+  if (options.out !== undefined && command !== 'screenshot') throw new Error('--out is only valid with screenshot.');
   if (command === 'interactive') {
     if (values.length || options.source !== 'watch') throw new Error('Interactive mode uses watch input and takes no message.');
     return { options, interactive: true };
@@ -60,7 +65,11 @@ function parseArgs(args, env = process.env) {
     const text = values.join(' ');
     if (!text.trim() || text.length > 8000 || text.includes('\0')) throw new Error('Message must contain 1–8000 characters without NUL.');
     payload = { action: command, text, ...(noSubmit ? { submit: false } : {}) };
-  } else throw new Error('Expected input, text, assistant or interactive. See --help.');
+  } else if (command === 'screenshot') {
+    // A stray argument is a typo rather than a file name; --out is the only way to name one.
+    if (values.length) throw new Error('screenshot takes no arguments; use --out FILE.');
+    payload = { action: 'screenshot' };
+  } else throw new Error('Expected input, text, assistant, screenshot or interactive. See --help.');
   return { options, payload };
 }
 function send(options, payload, signal) {
@@ -78,7 +87,7 @@ function send(options, payload, signal) {
     socket.on('error', error => finish(new Error(`Could not reach Faceclaw: ${error.code || 'connection error'}. Check the app, host address and USB forwarding or Tailscale.`)));
     socket.on('data', chunk => {
       buffer = Buffer.concat([buffer, chunk]);
-      if (buffer.length > 65536) return finish(new Error('Oversized Faceclaw response.'));
+      if (buffer.length > (MAX_RESPONSE_BYTES[payload.action] ?? 65536)) return finish(new Error('Oversized Faceclaw response.'));
       const end = buffer.indexOf(10);
       if (end < 0) return;
       let response;
@@ -197,7 +206,14 @@ async function main() {
     const args = parseArgs(process.argv.slice(2));
     if (args.help) return process.stdout.write(HELP);
     if (args.interactive) await interactive(args.options);
-    else { await send(args.options, args.payload); process.stdout.write('Sent.\n'); }
+    else if (args.payload.action === 'screenshot') {
+      // Checked before sending, so a refused capture is not taken and thrown away.
+      if (!args.options.out && process.stdout.isTTY) throw new Error('Refusing to write PNG data to a terminal; pass --out FILE or redirect stdout.');
+      const png = Buffer.from((await send(args.options, args.payload)).png ?? '', 'base64');
+      if (!png.length) throw new Error('Faceclaw returned no image.');
+      if (args.options.out) { fs.writeFileSync(args.options.out, png); process.stdout.write(`Saved ${png.length} bytes to ${args.options.out}.\n`); }
+      else process.stdout.write(png);
+    } else { await send(args.options, args.payload); process.stdout.write('Sent.\n'); }
   } catch (error) { process.stderr.write(`${error.message}\n`); process.exitCode = 1; }
 }
 module.exports = { parseArgs, send, keyGesture, interactive };

@@ -1,6 +1,7 @@
 package com.faceclaw.app
 
 import android.content.Context
+import android.util.Base64
 
 import java.io.File
 import java.io.FileOutputStream
@@ -29,6 +30,21 @@ class ScreenshotUtil private constructor() {
                 out.write(png)
             }
             return file.absolutePath
+        }
+
+        /**
+         * The same PNG [savePngScreenshot] writes, returned as base64 instead
+         * of landing on disk. The Input API's screenshot action uses this: a
+         * caller watching the display for a transient state polls it, and one
+         * file per poll would pile up in the app's external storage.
+         */
+        @JvmStatic
+        fun encodePngBase64(gray: ByteArray?, width: Int, height: Int): String {
+            if (gray == null || width <= 0 || height <= 0 || gray.size < width * height) {
+                throw IllegalArgumentException("invalid screenshot buffer")
+            }
+            val png = SharedScreenshots.encode4BitGrayPng(gray, width, height)
+            return Base64.encodeToString(png, Base64.NO_WRAP)
         }
 
         @JvmStatic
