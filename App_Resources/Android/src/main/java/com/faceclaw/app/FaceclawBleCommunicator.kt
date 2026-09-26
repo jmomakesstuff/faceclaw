@@ -109,9 +109,10 @@ class FaceclawBleCommunicator(context: Context, rightAddress: String?, leftAddre
         }
     }
 
-    // Active animated-GIF screen recording, or null when idle. Frames are
-    // pushed by recordScreenFrame(), which the TS side calls at each
-    // phone-preview flush.
+    // Active animated-GIF screen recording, or null when idle. The image
+    // pipeline hands it every frame it commits to the glasses (see
+    // startScreenRecording), and recordScreenFrame(), which the TS side calls
+    // at phone-preview flushes, adds samples of the preview.
     @Volatile private var screenRecorder: GifScreenRecorder? = null
 
     init {
@@ -265,9 +266,18 @@ class FaceclawBleCommunicator(context: Context, rightAddress: String?, leftAddre
         return ScreenshotUtil.savePngScreenshot(appContext, cropped, width, height)
     }
 
-    /** Begin collecting composite frames for an animated-GIF screen recording. */
+    /**
+     * Begin an animated-GIF screen recording. Every frame committed to the
+     * glasses is recorded as it goes out, so one that is replaced a moment
+     * later is still in the recording, which a timer sampling the compositor
+     * would miss.
+     */
     fun startScreenRecording() {
-        screenRecorder = GifScreenRecorder()
+        val recorder = GifScreenRecorder()
+        screenRecorder = recorder
+        core.setSentFrameTap { packed, width, height, scene ->
+            recorder.addSentFrame(packed, width, height, scene, System.currentTimeMillis())
+        }
     }
 
     /** Capture the current composite into the active recording; no-op when idle. */
@@ -280,15 +290,18 @@ class FaceclawBleCommunicator(context: Context, rightAddress: String?, leftAddre
     /** Finish the recording and save it as an animated GIF; returns the path or "". */
     @Throws(java.io.IOException::class)
     fun stopScreenRecording(): String {
+        core.setSentFrameTap(null)
         val recorder = screenRecorder
         screenRecorder = null
         if (recorder == null) {
             return ""
         }
+        // Saving waits for the frames still queued, so check the cap after it.
+        val path = recorder.save(appContext)
         if (recorder.isOverflowed()) {
             Log.i(TAG, "screen recording hit its frame cap; the tail was dropped")
         }
-        return recorder.save(appContext)
+        return path
     }
 
     fun setSurfaceVisible(id: String, visible: Boolean) = core.setSurfaceVisible(id, visible)

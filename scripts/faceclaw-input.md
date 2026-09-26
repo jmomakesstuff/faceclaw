@@ -95,8 +95,10 @@ Other apps receive the text unchanged. Assistant messages do not accept `-n`.
 `record start` begins an animated-GIF recording of the glasses screen, and
 `record stop` saves it and prints its path on the phone, for `adb pull`. It is
 the same recording as the phone's Record button, so either can stop one the
-other started. Stopping when nothing is recording succeeds and prints
-`Nothing was recording.` Screen recording is available on Android only.
+other started. While the glasses are connected, it holds every frame sent to
+them, timed as sent, so even a frame replaced milliseconds later appears in it.
+Stopping when nothing is recording succeeds and prints `Nothing was recording.`
+Screen recording is available on Android only.
 One-off commands return a nonzero exit code on rejection or connection failure.
 The CLI never automatically replays an input or message after a failure,
 since delivery may already have occurred.

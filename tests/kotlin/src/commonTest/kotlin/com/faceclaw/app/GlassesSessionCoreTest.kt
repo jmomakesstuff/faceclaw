@@ -229,6 +229,10 @@ private class FakeListener : FaceclawBleCommunicatorListener {
     override fun onFirmwareInfo(leftVersion: String?, rightVersion: String?, extension: String?) {}
 }
 
+/** An encoded shell scene: one white 2x1 layer at (0,0), with no dimming or selection. */
+private fun whiteCornerShellScene(): ByteReader = ArrayByteReader(
+    listOf(1, 1, 0, 0, 2, 1, 256, 0, 0).flatMap { listOf(it.toByte(), (it shr 8).toByte()) }.toByteArray() + byteArrayOf(-16, -16))
+
 private class Session {
     val platform = ClockPlatform(testPlatform())
     val link = FakeLink(platform)
@@ -344,6 +348,67 @@ class GlassesSessionCoreTest {
         assertTrue(s.listener.finished.any { it == "3:discarded: no change from displayed image" }, s.listener.finished.toString())
         assertEquals(2, s.link.cfwMessages().size)
         s.core.disconnect()
+    }
+
+    @Test
+    fun sentFrameTapSeesEachCommittedFrameOnce() {
+        val s = Session()
+        val lock = s.platform.createLock()
+        val tapped = ArrayList<Triple<ByteArray, String, Int>>()
+        s.core.setSentFrameTap { packed, width, height, scene ->
+            lock.withLock { tapped.add(Triple(packed.copyOf(), "${width}x$height", scene.layers.size)) }
+        }
+        s.startAndAwaitLayout()
+        s.core.configureCompositorScreen(64, 32)
+        s.core.configureSurface("s", 0, 0, 64, 32, 0, SurfaceCompositor.TRANSPARENCY_OPAQUE)
+        s.submitFrame(100, 0x80.toByte(), 1)
+        assertTrue(waitUntil(5_000) { s.listener.finished.contains("1:sent") }, s.listener.finished.toString())
+        s.submitFrame(101, 0x80.toByte(), 2)
+        assertTrue(waitUntil(5_000) { s.listener.finished.contains("2:sent") }, s.listener.finished.toString())
+        // Identical content is never committed, so it is never tapped.
+        s.submitFrame(101, 0x80.toByte(), 3)
+        assertTrue(waitUntil(2_000) { s.listener.finished.any { it.startsWith("3:") } })
+        val frames = lock.withLock { tapped.toList() }
+        assertEquals(2, frames.size, frames.map { it.second }.toString())
+        for ((frame, marker) in frames.zip(listOf(100, 101))) {
+            val pixels = ByteArray(64 * 32).also { it[marker] = 0x80.toByte() }
+            assertContentEquals(BmpUtil.pack4bppFromGray8(pixels, 64, 32), frame.first)
+            assertEquals("64x32", frame.second)
+        }
+        // Without CFW nothing draws a shell scene on the glasses, so none is tapped with the frame.
+        s.core.submitShellScene(whiteCornerShellScene(), 0, 4)
+        assertTrue(waitUntil(5_000) { lock.withLock { tapped.size } == 3 }, s.host.logs().takeLast(10).toString())
+        assertEquals(0, lock.withLock { tapped.last().third })
+        // Cleared, the pipeline carries on and nothing more is tapped.
+        s.core.setSentFrameTap(null)
+        s.submitFrame(102, 0x80.toByte(), 5)
+        assertTrue(waitUntil(5_000) { s.listener.finished.contains("5:sent") }, s.listener.finished.toString())
+        assertEquals(3, lock.withLock { tapped.size })
+        s.core.disconnect()
+    }
+
+    @Test
+    fun sentFrameTapCarriesTheShellSceneTheFirmwareDraws() {
+        val s = Session()
+        val lock = s.platform.createLock()
+        val tapped = ArrayList<Pair<ByteArray, ShellScene>>()
+        s.core.setSentFrameTap { packed, _, _, scene -> lock.withLock { tapped.add(packed to scene) } }
+        s.core.configureCompositorScreen(640, 480)
+        s.core.configureSurface("s", 0, 0, 64, 32, 0, SurfaceCompositor.TRANSPARENCY_OPAQUE)
+        s.startAndAwaitLayout()
+        s.core.monitor.withLock { s.core.customFirmwareDetected = true }
+        try {
+            s.submitFrame(0, 0x40, 1)
+            assertTrue(waitUntil(5_000) { s.displayedMatchesDesired() })
+            s.core.submitShellScene(whiteCornerShellScene(), 0, 2)
+            assertTrue(waitUntil(5_000) { s.displayedMatchesDesired() && lock.withLock { tapped.size } >= 2 })
+            val (packed, scene) = lock.withLock { tapped.last() }
+            assertEquals(1, scene.layers.size)
+            // The glasses draw the shell over the frame, so the frame itself still holds the
+            // app's pixel; the recorder's rendering of the two holds the shell's.
+            assertEquals(4, (packed[0].toInt() and 255) ushr 4)
+            assertEquals(240, scene.previewPacked(packed, 640, 480)[0].toInt() and 255)
+        } finally { s.core.close() }
     }
 
     @Test

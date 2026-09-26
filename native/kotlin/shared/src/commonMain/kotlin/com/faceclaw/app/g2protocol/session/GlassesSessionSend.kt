@@ -730,6 +730,12 @@ internal fun GlassesSessionCore.enqueueDesiredImageLocked() {
         desiredFrameId = 0
     }
     val packedFrame: ByteArray = packedSnapshot ?: ByteArray(0)
+    // driveSession only gets here when this composite is not the one last committed, so it is a
+    // frame on its way to the wearer. Recording it here, rather than by sampling the compositor,
+    // is what keeps a frame that is replaced a moment later in the recording.
+    if (packedFrame.isNotEmpty()) {
+        sentFrameTap?.invoke(packedFrame, width, height, if (customFirmwareDetected) scene else ShellScene.EMPTY)
+    }
     // Visibility belongs to this immutable composite, not the latest UI request.
     enqueueBrightnessLocked(!fingerprint.startsWith("blanked:"))
     if (customFirmwareDetected && packedFrame.size > 0) {
